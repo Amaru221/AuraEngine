@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.0.7)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
+      SIGNING_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Read version and verify tag
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches.Groups[1].Value
+          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
+          if (-not $tag) { throw "A tag is required" }
+          if ($tag -ne "v$version") { throw "Tag '$tag' does not match Cargo.toml v$version" }
+          "VERSION=$version" >> $env:GITHUB_ENV
+          "TAG=$tag" >> $env:GITHUB_ENV
+          Write-Host "Releasing $tag"
+
+      - name: Test
+        run: cargo test --all-targets
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Sign (optional)
+        if: env.SIGNING_PFX_BASE64 != ''
+        shell: pwsh
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "aura-signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+          .\scripts\sign.ps1 -Path target\release\aura.exe -Pfx $pfx -PfxPassword $env:SIGNING_PFX_PASSWORD
+
+      - name: Package
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1 -SkipTests -NoMpv
+          $pkg = "dist\aura-v$env:VERSION-windows-x64"
+          if (-not (Test-Path $pkg)) { throw "Package folder not found: $pkg" }
+
+          $exe = "dist\aura-v$env:VERSION-windows-x64.exe"
+          Copy-Item "target\release\aura.exe" $exe -Force
+
+          function Write-Checksum([string]$file) {
+            $name = Split-Path $file -Leaf
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+            "$hash  $name" | Set-Content "$file.sha256" -Encoding ASCII
+          }
+          Write-Checksum $exe
+          Write-Checksum "dist\aura-v$env:VERSION-windows-x64.zip"
+
+          Get-ChildItem dist | Select-Object Name, Length
+
+      - name: Build release notes
+        shell: pwsh
+        run: |
+          $lines = Get-Content CHANGELOG.md
+          $start = ($lines | Select-String -Pattern "^## \[$env:VERSION\]" | Select-Object -First 1).LineNumber
+          $body = @()
+          if ($start) {
+            for ($i = $start - 1; $i -lt $lines.Count; $i++) {
+              if ($i -gt ($start - 1) -and $lines[$i] -match '^## \[') { break }
+              $body += $lines[$i]
+            }
+          } else {
+            $body += "Aura Engine $env:VERSION"
+          }
+
+          $body += ""
+          $body += "## Assets"
+          $body += "- aura-v$env:VERSION-windows-x64.exe - portable executable."
+          $body += "- aura-v$env:VERSION-windows-x64.zip - executable + installer scripts + documentation + public certificate."
+          $body += "- SHA-256 checksums for both artifacts."
+          $body += ""
+          $sig = Get-AuthenticodeSignature "target\release\aura.exe"
+          if ($sig.Status -eq 'Valid') {
+            $body += "Signature: $($sig.SignerCertificate.Subject)"
+          } else {
+            $body += "This CI build is unsigned. Configure SIGNING_PFX_BASE64 and SIGNING_PFX_PASSWORD to sign it."
+          }
+          $body += ""
+          $body += "Source code: https://github.com/Amaru221/AuraEngine"
+          $body | Set-Content release-body.md -Encoding UTF8
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Aura Engine ${{ env.TAG }}
+          body_path: release-body.md
+          files: |
+            dist/aura-v${{ env.VERSION }}-windows-x64.exe
+            dist/aura-v${{ env.VERSION }}-windows-x64.exe.sha256
+            dist/aura-v${{ env.VERSION }}-windows-x64.zip
+            dist/aura-v${{ env.VERSION }}-windows-x64.zip.sha256
+            certs/aura-selfsigned.cer
+          fail_on_unmatched_files: true
