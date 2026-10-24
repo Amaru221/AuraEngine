@@ -108,7 +108,21 @@ pub fn init_process() {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let _ = SetCurrentProcessExplicitAppUserModelID(w!("Aura.Engine"));
+
+        // Named mutex that lets the installer detect a running instance
+        // before upgrading or uninstalling. The handle is intentionally kept
+        // for the whole process lifetime.
+        let _ = windows::Win32::System::Threading::CreateMutexW(
+            None,
+            false,
+            w!("AuraEngine.SingleInstance"),
+        );
     }
+}
+
+/// True when `hwnd` is the current foreground window.
+pub fn is_foreground(hwnd: HWND) -> bool {
+    unsafe { GetForegroundWindow() == hwnd }
 }
 
 pub fn exe_path() -> PathBuf {

@@ -7,6 +7,7 @@ fn main() {
             let mut res = winres::WindowsResource::new();
             res.set_icon("assets/aura.ico");
             res.set("ProductName", "Aura Engine");
+            res.set("CompanyName", "Amaru221");
             res.set("FileDescription", "Aura Engine - Native Live Wallpaper Manager");
             res.set("LegalCopyright", "GPL-3.0-or-later");
             res.set("OriginalFilename", "aura.exe");

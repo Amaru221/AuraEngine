@@ -131,6 +131,9 @@ pub struct AuraApp {
     pub last_edit: Instant,
 
     pub hidden: bool,
+    /// True once the parked window has lost the foreground at least once.
+    /// A later foreground transition is then a real "Switch to" request.
+    pub hidden_lost_foreground: bool,
     pub quitting: bool,
     pub startup_done: bool,
     pub initial_action: Option<String>,
@@ -145,6 +148,22 @@ pub struct AuraApp {
     pub confirm_reset: bool,
 }
 
+/// State machine for the parked (hidden to tray) window.
+///
+/// Returns `(restore, lost_foreground)`. A foreground transition only restores
+/// the window after it has lost the foreground at least once, so the window's
+/// own activation during a `--hidden` startup does not pop it on screen.
+fn parked_step(hidden: bool, lost_foreground: bool, is_foreground: bool) -> (bool, bool) {
+    if !hidden {
+        return (false, false);
+    }
+    if is_foreground {
+        (lost_foreground, false)
+    } else {
+        (false, true)
+    }
+}
+
 impl AuraApp {
     fn new(
         cc: &eframe::CreationContext<'_>,
@@ -152,7 +171,12 @@ impl AuraApp {
         initial_action: Option<String>,
     ) -> Self {
         util::ensure_dirs();
-        let cfg = Config::load();
+        let first_run = !util::config_path().exists();
+        let mut cfg = Config::load();
+        if first_run {
+            // Adopt the autostart state created by the installer.
+            cfg.start_with_windows = win::autostart_enabled();
+        }
         let strings = i18n::strings(cfg.language);
 
         theme::install_fonts(&cc.egui_ctx);
@@ -234,6 +258,7 @@ impl AuraApp {
             dirty: false,
             last_edit: Instant::now(),
             hidden,
+            hidden_lost_foreground: false,
             quitting: false,
             startup_done: false,
             initial_action,
@@ -873,6 +898,7 @@ impl AuraApp {
 
     pub fn show_window(&mut self) {
         self.hidden = false;
+        self.hidden_lost_foreground = false;
     }
 
     pub fn open_switcher(&mut self) {
@@ -1015,9 +1041,23 @@ impl AuraApp {
 
     fn handle_close_request(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) {
-            if self.cfg.close_to_tray && !self.quitting {
+            // The X button leaves Aura in the tray, but Task Manager's
+            // "End task" (and a system shutdown) must actually close it.
+            // When the close request arrives while another window is in the
+            // foreground, treat it as a system close and exit.
+            let foreground_is_ours = self
+                .main_hwnd
+                .map(|hwnd| {
+                    win::is_foreground(windows::Win32::Foundation::HWND(hwnd as *mut _))
+                })
+                .unwrap_or(false);
+
+            if self.cfg.close_to_tray && !self.quitting && foreground_is_ours {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.hidden = true;
+                self.hidden_lost_foreground = false;
+            } else {
+                self.quitting = true;
             }
         }
     }
@@ -1031,6 +1071,22 @@ impl AuraApp {
                 }
             }
         }
+        // Task Manager's "Switch to" brings the parked window to the
+        // foreground; bring it back on-screen when that happens. Ignore the
+        // window's own startup activation: only a foreground transition that
+        // happens after the parked window lost the foreground counts.
+        if self.hidden {
+            let is_fg = self
+                .main_hwnd
+                .map(|hwnd| win::is_foreground(windows::Win32::Foundation::HWND(hwnd as *mut _)))
+                .unwrap_or(false);
+            let (restore, lost) = parked_step(true, self.hidden_lost_foreground, is_fg);
+            self.hidden_lost_foreground = lost;
+            if restore {
+                self.hidden = false;
+            }
+        }
+
         let want_parked = self.hidden;
         if self.parked != Some(want_parked) {
             if let Some(hwnd) = self.main_hwnd {
@@ -1050,6 +1106,7 @@ impl eframe::App for AuraApp {
             self.startup_done = true;
             if self.cfg.start_hidden {
                 self.hidden = true;
+                self.hidden_lost_foreground = false;
             }
         }
 
@@ -1234,3 +1291,32 @@ pub fn run(hidden: bool, action: Option<String>) -> anyhow::Result<()> {
     .map_err(|err| anyhow::anyhow!("{err}"))
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::parked_step;
+
+    #[test]
+    fn hidden_startup_activation_does_not_restore() {
+        // The window is activated while starting with --hidden; keep it parked.
+        assert_eq!(parked_step(true, false, true), (false, false));
+    }
+
+    #[test]
+    fn background_startup_allows_a_later_switch_to() {
+        assert_eq!(parked_step(true, false, false), (false, true));
+        // Task Manager's "Switch to" focuses the parked window.
+        assert_eq!(parked_step(true, true, true), (true, false));
+    }
+
+    #[test]
+    fn hidden_window_stays_parked_while_in_background() {
+        assert_eq!(parked_step(true, true, false), (false, true));
+    }
+
+    #[test]
+    fn visible_window_never_restores_from_parked() {
+        assert_eq!(parked_step(false, true, true), (false, false));
+        assert_eq!(parked_step(false, false, false), (false, false));
+    }
+}

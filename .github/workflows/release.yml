@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g. v1.0.7)'
+        description: 'Tag to release (e.g. v1.0.8)'
         required: true
 
 permissions:
@@ -47,7 +47,7 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: Sign (optional)
+      - name: Sign application (optional)
         if: env.SIGNING_PFX_BASE64 != ''
         shell: pwsh
         run: |
@@ -55,24 +55,54 @@ jobs:
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
           .\scripts\sign.ps1 -Path target\release\aura.exe -Pfx $pfx -PfxPassword $env:SIGNING_PFX_PASSWORD
 
-      - name: Package
+      - name: Fetch portable mpv
+        shell: pwsh
+        run: .\scripts\fetch-mpv.ps1 -Destination (Join-Path $PWD "mpv.exe")
+
+      - name: Install Inno Setup
         shell: pwsh
         run: |
-          .\scripts\build.ps1 -SkipTests -NoMpv
+          $paths = @(
+            (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+            (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
+          )
+          if (-not ($paths | Where-Object { Test-Path $_ })) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "Could not install Inno Setup" }
+          }
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1 -SkipTests
           $pkg = "dist\aura-v$env:VERSION-windows-x64"
           if (-not (Test-Path $pkg)) { throw "Package folder not found: $pkg" }
 
           $exe = "dist\aura-v$env:VERSION-windows-x64.exe"
           Copy-Item "target\release\aura.exe" $exe -Force
 
+      - name: Build installer
+        shell: pwsh
+        run: |
+          .\scripts\build-installer.ps1 -SkipBuild
+          if ($env:SIGNING_PFX_BASE64 -ne '') {
+            $pfx = Join-Path $env:RUNNER_TEMP "aura-signing.pfx"
+            $setup = "dist\aura-v$env:VERSION-windows-x64-setup.exe"
+            .\scripts\sign.ps1 -Path $setup -Pfx $pfx -PfxPassword $env:SIGNING_PFX_PASSWORD
+          }
+
+      - name: Write checksums
+        shell: pwsh
+        run: |
           function Write-Checksum([string]$file) {
             $name = Split-Path $file -Leaf
             $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
             "$hash  $name" | Set-Content "$file.sha256" -Encoding ASCII
           }
-          Write-Checksum $exe
+          Write-Checksum "dist\aura-v$env:VERSION-windows-x64.exe"
           Write-Checksum "dist\aura-v$env:VERSION-windows-x64.zip"
-
+          Write-Checksum "dist\aura-v$env:VERSION-windows-x64-setup.exe"
           Get-ChildItem dist | Select-Object Name, Length
 
       - name: Build release notes
@@ -92,9 +122,10 @@ jobs:
 
           $body += ""
           $body += "## Assets"
+          $body += "- **aura-v$env:VERSION-windows-x64-setup.exe** - recommended Windows installer (Start Menu, desktop shortcut, Apps & Features, uninstaller)."
           $body += "- aura-v$env:VERSION-windows-x64.exe - portable executable."
-          $body += "- aura-v$env:VERSION-windows-x64.zip - executable + installer scripts + documentation + public certificate."
-          $body += "- SHA-256 checksums for both artifacts."
+          $body += "- aura-v$env:VERSION-windows-x64.zip - portable package with mpv, installer scripts, documentation and public certificate."
+          $body += "- SHA-256 checksums for every artifact."
           $body += ""
           $sig = Get-AuthenticodeSignature "target\release\aura.exe"
           if ($sig.Status -eq 'Valid') {
@@ -113,6 +144,8 @@ jobs:
           name: Aura Engine ${{ env.TAG }}
           body_path: release-body.md
           files: |
+            dist/aura-v${{ env.VERSION }}-windows-x64-setup.exe
+            dist/aura-v${{ env.VERSION }}-windows-x64-setup.exe.sha256
             dist/aura-v${{ env.VERSION }}-windows-x64.exe
             dist/aura-v${{ env.VERSION }}-windows-x64.exe.sha256
             dist/aura-v${{ env.VERSION }}-windows-x64.zip

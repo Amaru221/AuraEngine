@@ -27,9 +27,28 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: Upload binary
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $paths = @(
+            (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+            (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
+          )
+          if (-not ($paths | Where-Object { Test-Path $_ })) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "Could not install Inno Setup" }
+          }
+
+      - name: Build installer
+        shell: pwsh
+        run: .\scripts\build-installer.ps1 -SkipBuild -SkipTests -NoMpv
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: aura-windows-x64
-          path: target/release/aura.exe
+          path: |
+            target/release/aura.exe
+            dist/*-setup.exe
           if-no-files-found: error

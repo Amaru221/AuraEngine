@@ -36,14 +36,15 @@ UI (egui)  ──►  WorkerW (capa del escritorio)  ──►  mpv --wid  ─�
 
 ## Descargas
 
-Cada release publica dos artefactos:
+Cada release publica tres artefactos:
 
+- `aura-vX-windows-x64-setup.exe` — **instalador recomendado**: menú Inicio, acceso directo opcional, inicio con Windows opcional, entrada en Aplicaciones instaladas y desinstalador.
 - `aura-vX-windows-x64.exe` — ejecutable portable.
-- `aura-vX-windows-x64.zip` — ejecutable + `install.ps1`/`uninstall.ps1` + documentación + certificado público.
+- `aura-vX-windows-x64.zip` — paquete portable con mpv, `install.ps1`/`uninstall.ps1`, documentación y certificado público.
 
 https://github.com/Amaru221/AuraEngine/releases
 
-El `.exe` portable descarga mpv automáticamente en el primer uso si no lo encuentra.
+Los paquetes incluyen mpv, así que funcionan sin conexión. El `.exe` portable también descarga mpv automáticamente en el primer uso si no lo encuentra.
 
 ---
 
@@ -51,26 +52,44 @@ El `.exe` portable descarga mpv automáticamente en el primer uso si no lo encue
 
 ### Opción A — Instalador (recomendada)
 
-Descomprime el ZIP de release y ejecuta:
+Ejecuta `aura-vX-windows-x64-setup.exe`. El asistente permite:
+
+- Instalar solo para el usuario actual (sin UAC) o para todos los usuarios.
+- Crear un acceso directo en el escritorio (marcado por defecto).
+- Iniciar Aura con Windows (marcado por defecto).
+- Confiar en el certificado autofirmado de este build (opcional).
+- Elegir el idioma (español/inglés).
+
+El instalador crea el grupo **Aura Engine** en el menú Inicio (busca "Aura Engine"), registra la app en **Configuración → Aplicaciones → Aplicaciones instaladas** y añade un desinstalador que puede borrar también la configuración, la caché y los fondos descargados.
+
+Instalación silenciosa:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -TrustCertificate
+.\aura-v1.0.8-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ```
-
-Instala en `%LOCALAPPDATA%\Aura\bin`, crea un acceso directo en el menú Inicio, confía en el certificado autofirmado y arranca Aura.
-
-Opciones: `-NoStart`, `-NoShortcut`, `-DownloadMpv`.
 
 ### Opción B — Portable
 
 ```powershell
-cd .\dist\aura-v1.0.7-windows-x64
+cd .\dist\aura-v1.0.8-windows-x64
 .\aura.exe
 ```
 
 Funciona sin instalar: `mpv.exe` se detecta junto al ejecutable. La configuración se guarda en `%APPDATA%\Aura`.
 
-### Opción C — Compilar desde el código
+### Opción C — Script de PowerShell (sin instalador)
+
+El ZIP incluye el instalador clásico para despliegues desatendidos:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -TrustCertificate
+```
+
+Instala en `%LOCALAPPDATA%\Aura\bin` y crea un acceso directo en el menú Inicio.
+
+Opciones: `-NoStart`, `-NoShortcut`, `-DownloadMpv`.
+
+### Opción D — Compilar desde el código
 
 Requisitos: **Rust stable (MSVC)** y **Visual Studio Build Tools** con el SDK de Windows.
 
@@ -81,13 +100,16 @@ cargo build --release
 .\target\release\aura.exe
 ```
 
-### Opción D — Empaquetar un ZIP
+### Opción E — Generar instalador y ZIP
 
 ```powershell
-.\scripts\build.ps1 -Sign
+.\scripts\build.ps1 -Sign            # ZIP portable
+.\scripts\build-installer.ps1 -Sign  # instalador Inno Setup
 ```
 
-Genera `dist\aura-v1.0.7-windows-x64.zip`.
+Genera `dist\aura-v1.0.8-windows-x64.zip` y `dist\aura-v1.0.8-windows-x64-setup.exe`.
+El instalador necesita [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+(`winget install --id JRSoftware.InnoSetup -e`).
 
 ---
 
@@ -98,6 +120,18 @@ Genera `dist\aura-v1.0.7-windows-x64.zip`.
 Clic izquierdo: abrir Aura. Clic derecho: abrir, siguiente/anterior, pausar, selector rápido, detener y salir.
 
 Al cerrar la ventana, Aura sigue en la bandeja (configurable).
+
+### Administrador de tareas
+
+- **Finalizar tarea** cierra Aura por completo (no la deja en la bandeja).
+- **Cambiar a** trae de vuelta la ventana si estaba oculta.
+- El botón **X** de la ventana sigue ocultándola en la bandeja (configurable en Ajustes).
+
+### Desinstalar
+
+**Configuración → Aplicaciones → Aplicaciones instaladas → Aura Engine → Desinstalar**.
+El desinstalador cierra la app y pregunta si quieres borrar también `%APPDATA%\Aura` y
+`%LOCALAPPDATA%\Aura` (configuración, caché, miniaturas y fondos descargados).
 
 ### CLI
 

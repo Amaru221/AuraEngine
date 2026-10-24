@@ -2,6 +2,35 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [1.0.8] - 2026-10-24
+
+### Added
+
+- Proper Windows installer (Inno Setup) with welcome, license, tasks and
+  language pages (Spanish/English).
+- Start Menu group (`Aura Engine`), optional desktop shortcut and optional
+  start-with-Windows task.
+- Apps & Features entry with publisher, version, icon and uninstaller.
+- `App Paths` registration so `aura` works from Win+R and the Start menu.
+- Optional trust task for the public self-signed certificate.
+- Uninstall prompt to remove settings, cache and downloaded wallpapers.
+- Installer bundles mpv, so video wallpapers work offline after installing.
+- Release workflow builds and publishes the installer next to the `.exe`
+  and `.zip`; the CI ZIP now includes mpv as well.
+
+### Fixed
+
+- Task Manager "End task" now closes Aura instead of hiding it to the tray.
+- Task Manager "Switch to" brings the parked window back on-screen.
+- First run adopts the autostart state created by the installer.
+- The installer closes a running instance before upgrading or uninstalling,
+  including silent installs.
+- The autostart value is rewritten to the installed location and removed on
+  uninstall, replacing the legacy PowerShell value.
+- A named mutex lets the installer detect a running instance.
+- The parked window no longer pops up on a `--hidden` startup when Windows
+  gives it the foreground.
+
 ## [1.0.7] - 2026-10-24
 
 ### Added

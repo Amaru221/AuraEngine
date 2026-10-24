@@ -1,5 +1,7 @@
 ﻿/target
 /dist
+/mpv.exe
+/installer/mpv.exe
 *.pdb
 *.zip
 *.pfx
