@@ -2,14 +2,14 @@
 ; Build with: .\scripts\build-installer.ps1
 ;
 ; The version can be overridden from the command line:
-;   ISCC.exe /DMyAppVersion=1.0.8 installer\aura.iss
+;   ISCC.exe /DMyAppVersion=1.0.9 installer\aura.iss
 
 #ifndef MyAppName
   #define MyAppName "Aura Engine"
 #endif
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.8"
+  #define MyAppVersion "1.0.9"
 #endif
 
 #define MyAppPublisher "Amaru221"

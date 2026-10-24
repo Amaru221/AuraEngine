@@ -199,10 +199,13 @@ impl AuraApp {
         let response = draw_card(ui, rect, &self.thumbs, &info)
             .on_hover_text(format!("{}\n{}", item.name, crate::util::human_size(item.size)));
 
-        if response.clicked() {
+        // A click that closes a context menu (or any popup) must not fall
+        // through to the card underneath.
+        let popup_open = ui.ctx().memory(|memory| memory.any_popup_open());
+        if response.clicked() && !popup_open {
             self.apply_media(&item.path, None);
         }
-        if response.double_clicked() {
+        if response.double_clicked() && !popup_open {
             reveal_path(&item.path);
         }
 
@@ -231,10 +234,8 @@ impl AuraApp {
             ui.separator();
             ui.menu_button(self.strings.all_monitors, |ui| {
                 for monitor in &monitors {
-                    if ui
-                        .button(format!("{} ({})", monitor.label(), monitor.resolution()))
-                        .clicked()
-                    {
+                    let label = self.monitor_menu_label(monitor);
+                    if ui.button(label).clicked() {
                         self.apply_to_monitor(&path, monitor.key.clone());
                         ui.close_menu();
                     }

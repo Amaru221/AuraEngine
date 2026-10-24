@@ -2,6 +2,21 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [1.0.9] - 2026-10-24
+
+### Added
+
+- Monitor numbers everywhere: "Pantalla 1", "Pantalla 2"... on the Displays
+  map, the monitor cards and the library "apply to" menu, matching the numbers
+  shown by **Windows Settings → Display → Identify**.
+- Large number badges on the virtual desktop map.
+
+### Fixed
+
+- Clicking an entry in a library or Explore context menu (for example a
+  monitor in "Todas las pantallas") no longer also clicks the card underneath
+  the popup.
+
 ## [1.0.8] - 2026-10-24
 
 ### Added

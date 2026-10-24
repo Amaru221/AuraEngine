@@ -148,11 +148,19 @@ impl AuraApp {
                 StrokeKind::Inside,
             );
 
-            let label = format!(
-                "{}  {}",
-                crate::ui::library::truncate(&monitor.label(), 18),
-                monitor.resolution()
-            );
+            let label = match monitor.number() {
+                Some(number) => format!(
+                    "{} {}  -  {}",
+                    self.strings.display,
+                    number,
+                    monitor.resolution()
+                ),
+                None => format!(
+                    "{}  {}",
+                    crate::ui::library::truncate(&monitor.label(), 18),
+                    monitor.resolution()
+                ),
+            };
             painter.text(
                 rect.center_bottom() + Vec2::new(0.0, 6.0),
                 Align2::CENTER_TOP,
@@ -161,10 +169,23 @@ impl AuraApp {
                 theme::TEXT,
             );
 
+            // Windows display number, matching Settings -> Display -> Identify.
+            if let Some(number) = monitor.number() {
+                let badge = rect.left_top() + Vec2::new(17.0, 17.0);
+                painter.circle_filled(badge, 12.0, self.accent);
+                painter.text(
+                    badge,
+                    Align2::CENTER_CENTER,
+                    number.to_string(),
+                    FontId::proportional(12.0),
+                    Color32::from_rgb(16, 18, 24),
+                );
+            }
+
             if monitor.primary {
                 painter.text(
-                    rect.left_top() + Vec2::new(6.0, 6.0),
-                    Align2::LEFT_TOP,
+                    rect.right_top() + Vec2::new(-6.0, 6.0),
+                    Align2::RIGHT_TOP,
                     self.strings.primary,
                     FontId::proportional(8.5),
                     self.accent,
@@ -174,6 +195,8 @@ impl AuraApp {
     }
 
     fn monitor_card(&mut self, ui: &mut egui::Ui, monitor: &win::MonitorInfo) {
+        let title = self.monitor_title(monitor);
+        let name = monitor.label();
         egui::Frame::NONE
             .fill(theme::CARD)
             .stroke(Stroke::new(1.0_f32, theme::BORDER))
@@ -197,7 +220,12 @@ impl AuraApp {
                     );
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(monitor.label()).strong().size(14.0));
+                            ui.label(RichText::new(&title).strong().size(14.0));
+                            if name != title {
+                                ui.label(
+                                    RichText::new(&name).size(11.5).color(theme::MUTED),
+                                );
+                            }
                             if monitor.primary {
                                 super::pill(ui, self.strings.primary, self.accent);
                             }

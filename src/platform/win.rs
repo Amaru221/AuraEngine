@@ -94,6 +94,14 @@ impl MonitorInfo {
         format!("{}x{}", self.rect.width(), self.rect.height())
     }
 
+    /// Windows display number (1 for `\\.\DISPLAY1`), matching the numbers
+    /// shown by Windows Settings -> Display -> Identify.
+    pub fn number(&self) -> Option<u32> {
+        let upper = self.key.to_ascii_uppercase();
+        let (_, digits) = upper.rsplit_once("DISPLAY")?;
+        digits.parse().ok()
+    }
+
     pub fn label(&self) -> String {
         if self.name.is_empty() {
             self.key.clone()
@@ -533,3 +541,27 @@ pub fn reveal_path(path: &Path) {
     util::reveal_in_explorer(path);
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::{MonitorInfo, RectI};
+
+    fn monitor(key: &str) -> MonitorInfo {
+        MonitorInfo {
+            key: key.to_string(),
+            name: String::new(),
+            rect: RectI { left: 0, top: 0, right: 1920, bottom: 1080 },
+            work: RectI { left: 0, top: 0, right: 1920, bottom: 1080 },
+            primary: false,
+            dpi: 96,
+        }
+    }
+
+    #[test]
+    fn display_numbers_match_device_names() {
+        assert_eq!(monitor(r"\\.\DISPLAY1").number(), Some(1));
+        assert_eq!(monitor(r"\\.\DISPLAY2").number(), Some(2));
+        assert_eq!(monitor(r"\\.\DISPLAY12").number(), Some(12));
+        assert_eq!(monitor("custom").number(), None);
+    }
+}

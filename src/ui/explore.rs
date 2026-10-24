@@ -362,7 +362,9 @@ impl AuraApp {
             );
         }
 
-        if response.clicked() && !downloading {
+        // Do not let a click that closes a context menu reach the card.
+        let popup_open = ui.ctx().memory(|memory| memory.any_popup_open());
+        if response.clicked() && !downloading && !popup_open {
             self.download_remote(item.clone(), true);
         }
 

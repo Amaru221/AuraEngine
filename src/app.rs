@@ -621,6 +621,26 @@ impl AuraApp {
         self.apply_media(path, Some(key));
     }
 
+    /// "Pantalla 1" / "Display 1", using the Windows display number so it
+    /// matches Settings -> Display -> Identify.
+    pub fn monitor_title(&self, monitor: &win::MonitorInfo) -> String {
+        match monitor.number() {
+            Some(number) => format!("{} {number}", self.strings.display),
+            None => monitor.label(),
+        }
+    }
+
+    /// Numbered title plus the friendly adapter name and resolution.
+    pub fn monitor_menu_label(&self, monitor: &win::MonitorInfo) -> String {
+        let title = self.monitor_title(monitor);
+        let name = monitor.label();
+        if name == title {
+            format!("{title} ({})", monitor.resolution())
+        } else {
+            format!("{title} - {name} ({})", monitor.resolution())
+        }
+    }
+
     pub fn stop_all(&mut self) {
         self.engine.stop_all();
         self.restore_originals();
