@@ -1,0 +1,10 @@
+﻿/target
+/dist
+*.pdb
+*.zip
+*.pfx
+*.p12
+*.key
+/release-body.md
+.idea/
+.vscode/
