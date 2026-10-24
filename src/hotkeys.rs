@@ -15,8 +15,10 @@ pub enum HotkeyAction {
 }
 
 pub struct Hotkeys {
-    _manager: GlobalHotKeyManager,
+    manager: GlobalHotKeyManager,
     map: HashMap<u32, HotkeyAction>,
+    registered: Vec<HotKey>,
+    enabled: bool,
 }
 
 pub const SHORTCUTS: [(&str, &str, HotkeyAction); 5] = [
@@ -30,6 +32,7 @@ pub const SHORTCUTS: [(&str, &str, HotkeyAction); 5] = [
 pub fn create() -> Option<Hotkeys> {
     let manager = GlobalHotKeyManager::new().ok()?;
     let mut map = HashMap::new();
+    let mut registered = Vec::new();
 
     let definitions = [
         (Code::KeyW, HotkeyAction::Switcher),
@@ -43,15 +46,47 @@ pub fn create() -> Option<Hotkeys> {
         let hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), code);
         if manager.register(hotkey).is_ok() {
             map.insert(hotkey.id(), action);
+            registered.push(hotkey);
         } else {
             log::warn!("could not register hotkey {:?}", code);
         }
     }
 
     Some(Hotkeys {
-        _manager: manager,
+        manager,
         map,
+        registered,
+        enabled: true,
     })
+}
+
+impl Hotkeys {
+    /// Registers or unregisters every shortcut. Disabling is required while a
+    /// fullscreen game is foreground, otherwise Windows swallows the combos
+    /// before the game can see them.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        if enabled == self.enabled {
+            return;
+        }
+
+        if enabled {
+            for hotkey in &self.registered {
+                if let Err(err) = self.manager.register(*hotkey) {
+                    log::warn!("could not re-register hotkey {:?}: {err}", hotkey.key);
+                }
+            }
+            log::info!("global hotkeys enabled");
+        } else {
+            for hotkey in &self.registered {
+                if let Err(err) = self.manager.unregister(*hotkey) {
+                    log::warn!("could not unregister hotkey {:?}: {err}", hotkey.key);
+                }
+            }
+            log::info!("global hotkeys disabled (fullscreen app)");
+        }
+
+        self.enabled = enabled;
+    }
 }
 
 pub fn poll(hotkeys: &Hotkeys) -> Vec<HotkeyAction> {

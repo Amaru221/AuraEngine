@@ -164,6 +164,13 @@ fn parked_step(hidden: bool, lost_foreground: bool, is_foreground: bool) -> (boo
     }
 }
 
+/// Global shortcuts are suspended while a fullscreen app is foreground so the
+/// game receives its own key combinations. The HUD owns the foreground while
+/// it is open, so shortcuts stay enabled then.
+fn hotkeys_enabled(fullscreen: bool, hud_open: bool) -> bool {
+    !fullscreen || hud_open
+}
+
 impl AuraApp {
     fn new(
         cc: &eframe::CreationContext<'_>,
@@ -1029,6 +1036,13 @@ impl AuraApp {
         // The watcher thread does the expensive window enumeration; the UI
         // only applies the latest snapshot.
         while let Ok(mut env) = self.pause_rx.try_recv() {
+            // While a fullscreen app (usually a game) is in the foreground,
+            // unregister the global shortcuts so they reach the game instead
+            // of being swallowed by Windows. They are restored when the app
+            // closes or loses fullscreen.
+            if let Some(hotkeys) = self.hotkeys.as_mut() {
+                hotkeys.set_enabled(hotkeys_enabled(env.fullscreen, self.hud_open));
+            }
             if self.hud_open {
                 env.fullscreen = false;
             }
@@ -1319,5 +1333,18 @@ mod tests {
     fn visible_window_never_restores_from_parked() {
         assert_eq!(parked_step(false, true, true), (false, false));
         assert_eq!(parked_step(false, false, false), (false, false));
+    }
+}
+
+#[cfg(test)]
+mod hotkey_tests {
+    use super::hotkeys_enabled;
+
+    #[test]
+    fn shortcuts_are_suspended_for_fullscreen_apps() {
+        assert!(!hotkeys_enabled(true, false));
+        assert!(hotkeys_enabled(false, false));
+        // The quick switcher is our own fullscreen viewport.
+        assert!(hotkeys_enabled(true, true));
     }
 }

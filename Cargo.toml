@@ -1,6 +1,6 @@
 ﻿[package]
 name = "aura"
-version = "1.0.10"
+version = "1.0.11"
 edition = "2024"
 description = "Aura Engine - native live wallpaper manager for Windows"
 authors = ["Amaru221 and contributors"]

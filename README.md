@@ -65,13 +65,13 @@ El instalador crea el grupo **Aura Engine** en el menú Inicio (busca "Aura Engi
 Instalación silenciosa:
 
 ```powershell
-.\aura-v1.0.10-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+.\aura-v1.0.11-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ```
 
 ### Opción B — Portable
 
 ```powershell
-cd .\dist\aura-v1.0.10-windows-x64
+cd .\dist\aura-v1.0.11-windows-x64
 .\aura.exe
 ```
 
@@ -107,7 +107,7 @@ cargo build --release
 .\scripts\build-installer.ps1 -Sign  # instalador Inno Setup
 ```
 
-Genera `dist\aura-v1.0.10-windows-x64.zip` y `dist\aura-v1.0.10-windows-x64-setup.exe`.
+Genera `dist\aura-v1.0.11-windows-x64.zip` y `dist\aura-v1.0.11-windows-x64-setup.exe`.
 El instalador necesita [Inno Setup 6](https://jrsoftware.org/isinfo.php)
 (`winget install --id JRSoftware.InnoSetup -e`).
 
@@ -173,6 +173,7 @@ Si Aura no está en ejecución, los comandos que lo necesitan arrancan una insta
 | Pausa / reanudar | `Ctrl + Alt + Espacio` |
 | Detener | `Ctrl + Alt + S` |
 
+Los atajos globales se desactivan automaticamente mientras hay un juego o app a pantalla completa en primer plano y se reactivan al salir.
 Dentro del HUD: flechas/WASD mover, `RePág`/`AvPág` paginar, `Enter` aplicar, `Espacio` pausa, `F` favorito, `Esc` cerrar. `Ctrl+Alt+W` vuelve a abrir/cerrar el HUD.
 
 ---

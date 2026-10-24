@@ -2,6 +2,21 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [1.0.11] - 2026-10-24
+
+### Added
+
+- Global keyboard shortcuts are suspended while a fullscreen app (usually a
+  game) is in the foreground, so game key combinations reach the game instead
+  of being swallowed by Windows. They are registered again as soon as the app
+  closes or leaves fullscreen. The tray menu keeps working.
+
+### Changed
+
+- The fullscreen/occlusion watcher now drives both auto-pause and shortcut
+  suspension. The quick switcher viewport is excluded, so its own shortcuts
+  keep working while it is open.
+
 ## [1.0.10] - 2026-10-24
 
 ### Fixed
