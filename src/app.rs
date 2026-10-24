@@ -16,6 +16,7 @@ use crate::hotkeys::{self, HotkeyAction, Hotkeys};
 use crate::i18n::{self, Strings};
 use crate::online::{self, MotionBgsCategory, Provider, RemoteItem};
 use crate::platform::{ipc, static_wallpaper, win};
+use crate::update::{self, UpdateEvent, UpdateInfo};
 use crate::scanner::thumbs::{self, ThumbRequest, ThumbResult};
 use crate::scanner::{self, MediaItem, ScanEvent};
 use crate::theme;
@@ -114,6 +115,9 @@ pub struct AuraApp {
 
     pub accent: Color32,
     pub toast: Option<Toast>,
+    /// Startup wallpaper restores emit "wallpaper applied" toasts that would
+    /// replace the update notice; ignore informational toasts briefly.
+    pub suppress_info_until: Option<Instant>,
 
     pub hud_open: bool,
     pub hud_index: usize,
@@ -121,6 +125,18 @@ pub struct AuraApp {
     pub hud_page_anim: f32,
     /// Smoothly animated position of the Cinematic/Dock carousel.
     pub hud_carousel: f32,
+
+    pub update_available: Option<UpdateInfo>,
+    pub update_checked: bool,
+    pub update_checking: bool,
+    pub update_downloading: bool,
+    pub update_progress: (u64, u64),
+    pub update_ready: Option<PathBuf>,
+    pub update_error: Option<String>,
+    pub update_manual: bool,
+    pub update_notified: bool,
+    pub update_toast_at: Option<Instant>,
+    pub update_rx: Option<Receiver<UpdateEvent>>,
 
     pub tray: Option<Tray>,
     pub hotkeys: Option<Hotkeys>,
@@ -186,8 +202,17 @@ impl AuraApp {
         }
         let strings = i18n::strings(cfg.language);
 
+        let configured_accent = if cfg.accent_from_wallpaper {
+            theme::DEFAULT_ACCENT
+        } else {
+            cfg.accent_color
+                .map(|[r, g, b]| Color32::from_rgb(r, g, b))
+                .unwrap_or(theme::DEFAULT_ACCENT)
+        };
+
         theme::install_fonts(&cc.egui_ctx);
-        theme::apply(&cc.egui_ctx, theme::DEFAULT_ACCENT);
+        theme::set_preset(cfg.theme_preset, cfg.theme_bg);
+        theme::apply(&cc.egui_ctx, configured_accent);
 
         let mut engine = Engine::new(cfg.mpv_path.clone());
         // Probe mpv once. Doing this from the Settings page on every frame
@@ -250,13 +275,25 @@ impl AuraApp {
             installing: false,
             install_stage: String::new(),
             install_progress: (0, 0),
-            accent: theme::DEFAULT_ACCENT,
+            accent: configured_accent,
             toast: None,
+            suppress_info_until: Some(Instant::now() + Duration::from_secs(5)),
             hud_open: false,
             hud_index: 0,
             hud_items: Vec::new(),
             hud_page_anim: 0.0,
             hud_carousel: 0.0,
+            update_available: None,
+            update_checked: false,
+            update_checking: false,
+            update_downloading: false,
+            update_progress: (0, 0),
+            update_ready: None,
+            update_error: None,
+            update_manual: false,
+            update_notified: false,
+            update_toast_at: None,
+            update_rx: None,
             tray: None,
             hotkeys: hotkeys::create(),
             last_tick: Instant::now(),
@@ -270,7 +307,7 @@ impl AuraApp {
             initial_action,
             main_hwnd: None,
             parked: None,
-            applied_accent: theme::DEFAULT_ACCENT,
+            applied_accent: configured_accent,
             mpv_version,
             restore_done: false,
             monitor_scaling: HashMap::new(),
@@ -295,6 +332,7 @@ impl AuraApp {
 
         app.rescan();
         app.search_online(true);
+        app.init_updates(&cc.egui_ctx);
 
         if app.cfg.start_with_windows != win::autostart_enabled() {
             let _ = win::set_autostart(app.cfg.start_with_windows);
@@ -328,6 +366,11 @@ impl AuraApp {
     }
 
     pub fn info(&mut self, text: impl Into<String>) {
+        if let Some(until) = self.suppress_info_until {
+            if Instant::now() < until {
+                return;
+            }
+        }
         self.toast(text, ToastKind::Info);
     }
 
@@ -776,7 +819,7 @@ impl AuraApp {
         }
     }
 
-    fn update_accent_from_last(&mut self) {
+    pub fn update_accent_from_last(&mut self) {
         if let Some(path) = self.cfg.last_applied.clone() {
             self.update_accent_from(&path);
         }
@@ -784,11 +827,213 @@ impl AuraApp {
 
     pub fn set_accent(&mut self, accent: Color32) {
         self.accent = accent;
+        if !self.cfg.accent_from_wallpaper {
+            let rgb = [accent.r(), accent.g(), accent.b()];
+            if self.cfg.accent_color != Some(rgb) {
+                self.cfg.accent_color = Some(rgb);
+                self.mark_dirty();
+            }
+        }
         if self.cfg.apply_windows_accent {
             let [r, g, b, _] = accent.to_array();
             if let Err(err) = win::apply_windows_accent(r, g, b) {
                 log::warn!("accent: {err:#}");
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Updates
+    // -----------------------------------------------------------------------
+
+    fn init_updates(&mut self, ctx: &egui::Context) {
+        if let Some(cache) = update::UpdateCache::load() {
+            self.update_checked = true;
+            if let Some(info) = cache.info() {
+                if update::is_newer(&info.version, env!("CARGO_PKG_VERSION")) {
+                    self.update_available = Some(info);
+                    // Shown shortly after the first wallpaper restore,
+                    // otherwise the "wallpaper applied" toast replaces it.
+                    self.update_toast_at =
+                        Some(Instant::now() + Duration::from_millis(1500));
+                }
+            }
+            if cache.is_fresh() {
+                return;
+            }
+        }
+        self.start_update_check(ctx.clone(), false);
+    }
+
+    fn notify_update(&mut self) {
+        if self.update_notified {
+            return;
+        }
+        let Some(info) = self.update_available.clone() else {
+            return;
+        };
+        self.update_notified = true;
+        self.update_toast_at = None;
+        self.toast = Some(Toast {
+            text: format!("{}: v{}", self.strings.update_available, info.version),
+            kind: ToastKind::Info,
+            until: Instant::now() + Duration::from_secs(6),
+        });
+        // The toast is drawn by the main window; bring it back when Aura was
+        // started minimized so the user actually sees the notification.
+        if self.hidden {
+            self.show_window();
+        }
+    }
+
+    pub fn start_update_check(&mut self, ctx: egui::Context, manual: bool) {
+        if self.update_checking {
+            return;
+        }
+        self.update_checking = true;
+        self.update_manual = manual;
+        self.update_error = None;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        self.update_rx = Some(rx);
+        let spawned = std::thread::Builder::new()
+            .name("aura-update".into())
+            .spawn(move || {
+                let checked = update::check_latest();
+                let _ = tx.send(UpdateEvent::Checked(checked));
+                ctx.request_repaint();
+            });
+        if let Err(err) = spawned {
+            self.update_checking = false;
+            self.update_error = Some(format!("{err}"));
+            if manual {
+                self.error(format!("{}: {err}", self.strings.update_failed));
+            }
+        }
+    }
+
+    pub fn start_update_download(&mut self, ctx: egui::Context) {
+        if self.update_downloading || self.update_ready.is_some() {
+            return;
+        }
+        let Some(info) = self.update_available.clone() else {
+            return;
+        };
+        self.update_downloading = true;
+        self.update_progress = (0, 0);
+        self.update_error = None;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        self.update_rx = Some(rx);
+        let progress_tx = tx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("aura-update-download".into())
+            .spawn(move || {
+                let downloaded = update::download_and_verify(&info, &progress_tx);
+                let _ = tx.send(UpdateEvent::Downloaded(downloaded));
+                ctx.request_repaint();
+            });
+        if let Err(err) = spawned {
+            self.update_downloading = false;
+            self.update_error = Some(format!("{err}"));
+            self.error(format!("{}: {err}", self.strings.update_failed));
+        }
+    }
+
+    pub fn install_update(&mut self) {
+        let Some(path) = self.update_ready.clone() else {
+            return;
+        };
+        if !path.is_file() {
+            self.update_ready = None;
+            self.error(self.strings.update_failed);
+            return;
+        }
+        match std::process::Command::new(&path).spawn() {
+            Ok(_) => {
+                log::info!("launching installer: {}", path.display());
+                self.info(self.strings.update_install);
+                // The installer asks the running instance to quit before it
+                // replaces the executable; start winding down now.
+                self.request_quit();
+            }
+            Err(err) => {
+                self.error(format!("{}: {err}", self.strings.update_failed));
+            }
+        }
+    }
+
+    fn poll_updates(&mut self, ctx: &egui::Context) {
+        let events: Vec<UpdateEvent> = {
+            let Some(rx) = self.update_rx.as_ref() else {
+                return;
+            };
+            let mut events = Vec::new();
+            while let Ok(event) = rx.try_recv() {
+                events.push(event);
+            }
+            events
+        };
+
+        let finished = events
+            .iter()
+            .any(|event| matches!(event, UpdateEvent::Checked(_) | UpdateEvent::Downloaded(_)));
+        if finished {
+            self.update_rx = None;
+        }
+
+        for event in events {
+            match event {
+                UpdateEvent::Checked(Ok(Some(info))) => {
+                    self.update_checking = false;
+                    self.update_checked = true;
+                    self.update_available = Some(info.clone());
+                    self.update_ready = None;
+                    self.update_downloading = false;
+                    update::UpdateCache::record(Some(&info)).save();
+                    if !self.update_notified {
+                        // Let the wallpaper restore/applied toast finish first.
+                        self.update_toast_at =
+                            Some(Instant::now() + Duration::from_millis(1200));
+                    }
+                    self.update_manual = false;
+                }
+                UpdateEvent::Checked(Ok(None)) => {
+                    self.update_checking = false;
+                    self.update_checked = true;
+                    self.update_available = None;
+                    self.update_ready = None;
+                    update::UpdateCache::record(None).save();
+                    if self.update_manual {
+                        self.update_manual = false;
+                        self.info(self.strings.update_up_to_date);
+                    }
+                }
+                UpdateEvent::Checked(Err(err)) => {
+                    self.update_checking = false;
+                    self.update_error = Some(err.clone());
+                    log::warn!("update check failed: {err}");
+                    if self.update_manual {
+                        self.update_manual = false;
+                        self.error(format!("{}: {err}", self.strings.update_failed));
+                    }
+                }
+                UpdateEvent::Progress { downloaded, total } => {
+                    self.update_progress = (downloaded, total);
+                }
+                UpdateEvent::Downloaded(Ok(path)) => {
+                    self.update_downloading = false;
+                    self.update_ready = Some(path);
+                    self.info(self.strings.update_ready);
+                }
+                UpdateEvent::Downloaded(Err(err)) => {
+                    self.update_downloading = false;
+                    self.update_error = Some(err.clone());
+                    self.error(format!("{}: {err}", self.strings.update_failed));
+                }
+            }
+        }
+
+        if self.update_checking || self.update_downloading {
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
 
@@ -1140,6 +1385,12 @@ impl eframe::App for AuraApp {
             self.update_accent_from_last();
         }
 
+        if let Some(at) = self.update_toast_at {
+            if Instant::now() >= at {
+                self.notify_update();
+            }
+        }
+
         // Defer match-based commands until the library has been scanned.
         if let Some(action) = self.initial_action.clone() {
             let needs_library = action == "next" || action == "prev";
@@ -1213,6 +1464,7 @@ impl eframe::App for AuraApp {
 
         self.tick_engine();
         self.poll_pause();
+        self.poll_updates(ctx);
 
         if self.accent != self.applied_accent {
             theme::apply(ctx, self.accent);

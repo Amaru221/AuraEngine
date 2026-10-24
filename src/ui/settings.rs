@@ -1,10 +1,10 @@
-﻿//! Settings page.
+//! Settings page.
 
 use eframe::egui;
 use egui::{Color32, RichText, Stroke, Vec2};
 
 use crate::app::AuraApp;
-use crate::config::{Config, HudStyle, Lang, ParentMode};
+use crate::config::{Config, HudStyle, Lang, ParentMode, ThemePreset};
 use crate::hotkeys;
 use crate::platform::win;
 use crate::theme;
@@ -92,6 +92,88 @@ impl AuraApp {
 
     fn settings_appearance(&mut self, ui: &mut egui::Ui) {
         section_card(ui, self.strings.settings_appearance, |ui| {
+            row(ui, self.strings.theme_preset, "", |ui| {
+                let current = self.cfg.theme_preset;
+                let mut preset = current;
+                egui::ComboBox::from_id_salt("theme_preset")
+                    .selected_text(theme_name(self.strings, current))
+                    .width(170.0)
+                    .show_ui(ui, |ui| {
+                        for option in [
+                            ThemePreset::Dark,
+                            ThemePreset::Midnight,
+                            ThemePreset::Light,
+                            ThemePreset::Custom,
+                        ] {
+                            ui.selectable_value(
+                                &mut preset,
+                                option,
+                                theme_name(self.strings, option),
+                            );
+                        }
+                    });
+                if preset != current {
+                    self.cfg.theme_preset = preset;
+                    theme::set_preset(preset, self.cfg.theme_bg);
+                    theme::apply(ui.ctx(), self.accent);
+                    self.mark_dirty();
+                }
+            });
+
+            if self.cfg.theme_preset == ThemePreset::Custom {
+                row(ui, self.strings.theme_background, "", |ui| {
+                    let mut bg = self.cfg.theme_bg.unwrap_or([18, 20, 28]);
+                    if ui.color_edit_button_srgb(&mut bg).changed() {
+                        self.cfg.theme_bg = Some(bg);
+                        theme::set_preset(ThemePreset::Custom, Some(bg));
+                        theme::apply(ui.ctx(), self.accent);
+                        self.mark_dirty();
+                    }
+                    ui.label(
+                        RichText::new(format!("#{:02X}{:02X}{:02X}", bg[0], bg[1], bg[2]))
+                            .size(10.5)
+                            .color(theme::muted()),
+                    );
+                });
+            }
+
+            row(
+                ui,
+                self.strings.theme_accent,
+                self.strings.theme_accent_hint,
+                |ui| {
+                    let mut rgb = [self.accent.r(), self.accent.g(), self.accent.b()];
+                    if ui.color_edit_button_srgb(&mut rgb).changed() {
+                        let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                        self.cfg.accent_from_wallpaper = false;
+                        self.set_accent(color);
+                        theme::apply(ui.ctx(), color);
+                        self.mark_dirty();
+                    }
+                    for preset in ACCENT_PRESETS {
+                        let selected = self.accent == preset;
+                        let (rect, response) =
+                            ui.allocate_exact_size(Vec2::splat(20.0), egui::Sense::click());
+                        let center = rect.center();
+                        ui.painter()
+                            .circle_filled(center, if selected { 9.0 } else { 7.0 }, preset);
+                        if selected {
+                            ui.painter().circle_stroke(
+                                center,
+                                10.5,
+                                Stroke::new(1.5_f32, theme::text()),
+                            );
+                        }
+                        if response.clicked() {
+                            self.cfg.accent_from_wallpaper = false;
+                            self.set_accent(preset);
+                            theme::apply(ui.ctx(), preset);
+                            self.mark_dirty();
+                        }
+                    }
+                },
+            );
+
             let mut accent = self.cfg.accent_from_wallpaper;
             if row_checkbox(
                 ui,
@@ -100,6 +182,11 @@ impl AuraApp {
                 &mut accent,
             ) {
                 self.cfg.accent_from_wallpaper = accent;
+                if accent {
+                    self.update_accent_from_last();
+                } else {
+                    self.set_accent(self.accent);
+                }
                 self.mark_dirty();
             }
 
@@ -142,14 +229,22 @@ impl AuraApp {
                 }
             });
 
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 26.0), egui::Sense::hover());
+            let (rect, _) = ui.allocate_exact_size(
+                Vec2::new(ui.available_width(), 26.0),
+                egui::Sense::hover(),
+            );
             ui.painter().rect_filled(rect, 8, self.accent);
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                format!("#{:02X}{:02X}{:02X}", self.accent.r(), self.accent.g(), self.accent.b()),
+                format!(
+                    "#{:02X}{:02X}{:02X}",
+                    self.accent.r(),
+                    self.accent.g(),
+                    self.accent.b()
+                ),
                 egui::FontId::proportional(11.0),
-                Color32::from_rgb(10, 11, 15),
+                theme::contrast_on(self.accent),
             );
         });
     }
@@ -251,10 +346,10 @@ impl AuraApp {
             let mut remove: Option<std::path::PathBuf> = None;
             for dir in &self.cfg.library_dirs {
                 ui.horizontal(|ui| {
-                    ui.label(theme::icon(theme::ICON_FOLDER).color(theme::MUTED));
+                    ui.label(theme::icon(theme::ICON_FOLDER).color(theme::muted()));
                     let label = RichText::new(dir.display().to_string())
                         .size(11.5)
-                        .color(theme::TEXT);
+                        .color(theme::text());
                     if ui.add(egui::Label::new(label).truncate()).clicked() {
                         crate::util::open_path(dir);
                     }
@@ -299,7 +394,7 @@ impl AuraApp {
                 let color = if self.engine.mpv_available() {
                     Color32::from_rgb(96, 210, 150)
                 } else {
-                    theme::DANGER
+                    theme::danger()
                 };
                 ui.painter().circle_filled(rect.center(), 4.0, color);
                 ui.label(
@@ -309,12 +404,12 @@ impl AuraApp {
                         self.strings.engine_missing
                     })
                     .size(12.0)
-                    .color(theme::TEXT),
+                    .color(theme::text()),
                 );
                 ui.label(
                     RichText::new(format!("{}", self.engine.running_count()))
                         .size(11.0)
-                        .color(theme::MUTED),
+                        .color(theme::muted()),
                 );
             });
 
@@ -322,7 +417,7 @@ impl AuraApp {
             ui.label(
                 RichText::new(self.strings.mpv_path)
                     .size(11.0)
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
             );
             ui.horizontal(|ui| {
                 let path = self
@@ -332,7 +427,7 @@ impl AuraApp {
                     .unwrap_or_else(|| "mpv.exe".into());
                 ui.add(
                     egui::Label::new(
-                        RichText::new(path).size(11.5).color(theme::TEXT),
+                        RichText::new(path).size(11.5).color(theme::text()),
                     )
                     .truncate(),
                 );
@@ -381,7 +476,7 @@ impl AuraApp {
                 ui.label(
                     RichText::new(version)
                         .size(10.0)
-                        .color(theme::MUTED),
+                        .color(theme::muted()),
                 );
             }
         });
@@ -398,18 +493,18 @@ impl AuraApp {
                     hotkeys::HotkeyAction::Stop => self.strings.hotkey_stop,
                 };
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(label).size(12.0).color(theme::TEXT));
+                    ui.label(RichText::new(label).size(12.0).color(theme::text()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         egui::Frame::NONE
-                            .fill(Color32::from_rgb(12, 14, 19))
-                            .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                            .fill(theme::card())
+                            .stroke(Stroke::new(1.0_f32, theme::border()))
                             .corner_radius(6)
                             .inner_margin(egui::Margin::symmetric(8, 3))
                             .show(ui, |ui| {
                                 ui.label(
                                     RichText::new(keys)
                                         .size(10.5)
-                                        .color(theme::MUTED)
+                                        .color(theme::muted())
                                         .monospace(),
                                 );
                             });
@@ -426,7 +521,7 @@ impl AuraApp {
             ui.label(
                 RichText::new(strings.pexels_key)
                     .size(11.0)
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
             );
             if ui
                 .add(
@@ -442,14 +537,14 @@ impl AuraApp {
             ui.label(
                 RichText::new(strings.pexels_key_hint)
                     .size(10.0)
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
             );
 
             ui.add_space(10.0);
             ui.label(
                 RichText::new("Wallhaven API key (optional)")
                     .size(11.0)
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
             );
             if ui
                 .add(
@@ -470,14 +565,14 @@ impl AuraApp {
             ui.label(
                 RichText::new(strings.config_path)
                     .size(11.0)
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
             );
             ui.horizontal(|ui| {
                 ui.add(
                     egui::Label::new(
                         RichText::new(crate::util::config_path().display().to_string())
                             .size(11.0)
-                            .color(theme::TEXT),
+                            .color(theme::text()),
                     )
                     .truncate(),
                 );
@@ -489,14 +584,14 @@ impl AuraApp {
             ui.label(
                 RichText::new(strings.data_path)
                     .size(11.0)
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
             );
             ui.horizontal(|ui| {
                 ui.add(
                     egui::Label::new(
                         RichText::new(crate::util::data_root().display().to_string())
                             .size(11.0)
-                            .color(theme::TEXT),
+                            .color(theme::text()),
                     )
                     .truncate(),
                 );
@@ -511,7 +606,7 @@ impl AuraApp {
                     ui.label(
                         RichText::new(strings.reset_warning)
                             .size(11.0)
-                            .color(theme::DANGER),
+                            .color(theme::danger()),
                     );
                     if ui.button(strings.cancel).clicked() {
                         self.confirm_reset = false;
@@ -551,9 +646,9 @@ fn row(
 ) {
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
-            ui.label(RichText::new(title).size(12.5).color(theme::TEXT));
+            ui.label(RichText::new(title).size(12.5).color(theme::text()));
             if !subtitle.is_empty() {
-                ui.label(RichText::new(subtitle).size(10.0).color(theme::MUTED));
+                ui.label(RichText::new(subtitle).size(10.0).color(theme::muted()));
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -572,9 +667,9 @@ fn row_checkbox(
     let mut changed = false;
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
-            ui.label(RichText::new(title).size(12.5).color(theme::TEXT));
+            ui.label(RichText::new(title).size(12.5).color(theme::text()));
             if !subtitle.is_empty() {
-                ui.label(RichText::new(subtitle).size(10.0).color(theme::MUTED));
+                ui.label(RichText::new(subtitle).size(10.0).color(theme::muted()));
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -583,4 +678,24 @@ fn row_checkbox(
     });
     ui.add_space(2.0);
     changed
+}
+
+const ACCENT_PRESETS: [Color32; 8] = [
+    Color32::from_rgb(122, 162, 247),
+    Color32::from_rgb(158, 120, 247),
+    Color32::from_rgb(247, 122, 162),
+    Color32::from_rgb(247, 162, 74),
+    Color32::from_rgb(237, 201, 74),
+    Color32::from_rgb(94, 214, 154),
+    Color32::from_rgb(74, 200, 220),
+    Color32::from_rgb(240, 94, 94),
+];
+
+fn theme_name(strings: &crate::i18n::Strings, preset: ThemePreset) -> &'static str {
+    match preset {
+        ThemePreset::Dark => strings.theme_dark,
+        ThemePreset::Midnight => strings.theme_midnight,
+        ThemePreset::Light => strings.theme_light,
+        ThemePreset::Custom => strings.theme_custom,
+    }
 }

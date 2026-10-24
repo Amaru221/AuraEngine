@@ -2,6 +2,31 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [1.0.12] - 2026-10-24
+
+### Added
+
+- Automatic update checks against GitHub Releases (cached for 6 hours). A
+  toast announces a new version at startup, and the About page shows an update
+  badge, the release notes and a download button.
+- In-app update: downloads the installer, verifies its SHA-256 against the
+  published checksum and launches it. The installer closes Aura and
+  relaunches the new version.
+- Theme personalization in **Settings -> Appearance**: Aura Dark, Midnight,
+  Light and Custom presets, a custom background color, a manual accent color
+  with presets, and the existing wallpaper extraction toggle.
+- Theme preset and accent color are persisted in the configuration.
+
+### Changed
+
+- Every custom-painted surface uses the active theme palette, so the light
+  theme is readable (page titles, toasts, banners, filter chips, keycaps and
+  badges).
+
+### Fixed
+
+- Startup "wallpaper applied" toasts no longer hide the update notification.
+
 ## [1.0.11] - 2026-10-24
 
 ### Added

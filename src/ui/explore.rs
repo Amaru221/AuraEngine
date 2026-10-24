@@ -1,4 +1,4 @@
-﻿//! Online catalog page.
+//! Online catalog page.
 
 use eframe::egui;
 use egui::{Align, Color32, Layout, RichText, Sense, Stroke, StrokeKind, Vec2};
@@ -26,20 +26,20 @@ impl AuraApp {
 
         if self.remote_provider == Provider::Pexels && self.cfg.pexels_api_key.trim().is_empty() {
             egui::Frame::NONE
-                .fill(theme::CARD)
-                .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                .fill(theme::card())
+                .stroke(Stroke::new(1.0_f32, theme::border()))
                 .corner_radius(12)
                 .inner_margin(egui::Margin::same(18))
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new(self.strings.pexels_key)
                             .strong()
-                            .color(theme::TEXT),
+                            .color(theme::text()),
                     );
                     ui.label(
                         RichText::new(self.strings.pexels_key_hint)
                             .size(12.0)
-                            .color(theme::MUTED),
+                            .color(theme::muted()),
                     );
                     ui.add_space(8.0);
                     if ui.button(self.strings.open_settings).clicked() {
@@ -51,12 +51,12 @@ impl AuraApp {
 
         if let Some(error) = &self.remote_error {
             egui::Frame::NONE
-                .fill(Color32::from_rgb(46, 22, 24))
-                .stroke(Stroke::new(1.0_f32, theme::DANGER.gamma_multiply(0.6)))
+                .fill(theme::card())
+                .stroke(Stroke::new(1.0_f32, theme::danger().gamma_multiply(0.6)))
                 .corner_radius(10)
                 .inner_margin(egui::Margin::same(14))
                 .show(ui, |ui| {
-                    ui.label(RichText::new(error).size(12.0).color(theme::TEXT));
+                    ui.label(RichText::new(error).size(12.0).color(theme::text()));
                 });
             ui.add_space(10.0);
         }
@@ -66,7 +66,7 @@ impl AuraApp {
                 ui.add_space(70.0);
                 ui.spinner();
                 ui.add_space(8.0);
-                ui.label(RichText::new(self.strings.loading).color(theme::MUTED));
+                ui.label(RichText::new(self.strings.loading).color(theme::muted()));
             });
             return;
         }
@@ -75,10 +75,10 @@ impl AuraApp {
             ui.vertical_centered(|ui| {
                 ui.add_space(70.0);
                 ui.label(
-                    theme::icon_large(theme::ICON_GLOBE, 42.0).color(theme::BORDER),
+                    theme::icon_large(theme::ICON_GLOBE, 42.0).color(theme::border()),
                 );
                 ui.add_space(10.0);
-                ui.label(RichText::new(self.strings.no_results).color(theme::MUTED));
+                ui.label(RichText::new(self.strings.no_results).color(theme::muted()));
             });
             return;
         }
@@ -114,7 +114,7 @@ impl AuraApp {
             if self.remote_provider.supports_pages() {
                 if self.remote_loading {
                     ui.spinner();
-                    ui.label(RichText::new(self.strings.loading).size(12.0).color(theme::MUTED));
+                    ui.label(RichText::new(self.strings.loading).size(12.0).color(theme::muted()));
                 } else if ui.button(self.strings.load_more).clicked() {
                     self.remote_page = self.remote_page.saturating_add(1);
                     self.search_online(false);
@@ -128,7 +128,7 @@ impl AuraApp {
                         self.remote.len()
                     ))
                     .size(11.0)
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
                 );
             });
         });
@@ -145,20 +145,20 @@ impl AuraApp {
                     Provider::Pexels => self.strings.provider_pexels,
                 };
                 let text = RichText::new(label).size(12.5).color(if selected {
-                    Color32::from_rgb(10, 11, 15)
+                    theme::contrast_on(self.accent)
                 } else {
-                    theme::MUTED
+                    theme::muted()
                 });
                 let button = egui::Button::new(text)
                     .fill(if selected {
                         self.accent
                     } else {
-                        theme::CARD
+                        theme::card()
                     })
                     .stroke(if selected {
                         Stroke::NONE
                     } else {
-                        Stroke::new(1.0_f32, theme::BORDER)
+                        Stroke::new(1.0_f32, theme::border())
                     })
                     .corner_radius(9)
                     .min_size(Vec2::new(0.0, 30.0));
@@ -172,13 +172,13 @@ impl AuraApp {
 
             if self.remote_provider.supports_search() {
                 egui::Frame::NONE
-                    .fill(theme::CARD)
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                    .fill(theme::card())
+                    .stroke(Stroke::new(1.0_f32, theme::border()))
                     .corner_radius(9)
                     .inner_margin(egui::Margin::symmetric(10, 6))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(theme::icon(theme::ICON_SEARCH).color(theme::MUTED));
+                            ui.label(theme::icon(theme::ICON_SEARCH).color(theme::muted()));
                             let response = ui.add(
                                 egui::TextEdit::singleline(&mut self.remote_query)
                                     .hint_text(self.strings.search_online)
@@ -225,20 +225,20 @@ impl AuraApp {
                     MotionBgsCategory::Nature => self.strings.motionbgs_nature,
                 };
                 let text = RichText::new(label).size(11.5).color(if selected {
-                    Color32::from_rgb(10, 11, 15)
+                    theme::contrast_on(self.accent)
                 } else {
-                    theme::MUTED
+                    theme::muted()
                 });
                 let button = egui::Button::new(text)
                     .fill(if selected {
                         self.accent
                     } else {
-                        theme::CARD
+                        theme::card()
                     })
                     .stroke(if selected {
                         Stroke::NONE
                     } else {
-                        Stroke::new(1.0_f32, theme::BORDER)
+                        Stroke::new(1.0_f32, theme::border())
                     })
                     .corner_radius(18)
                     .min_size(Vec2::new(0.0, 28.0));
@@ -286,7 +286,7 @@ impl AuraApp {
             Sense::click(),
         );
         let painter = ui.painter();
-        painter.rect_filled(rect, 12, theme::CARD);
+        painter.rect_filled(rect, 12, theme::card());
         let image_rect = egui::Rect::from_min_size(
             rect.min + Vec2::splat(1.0),
             Vec2::new(rect.width() - 2.0, CARD_H - 2.0),
@@ -301,7 +301,7 @@ impl AuraApp {
                 egui::Align2::CENTER_CENTER,
                 &item.source,
                 egui::FontId::proportional(11.0),
-                theme::MUTED,
+                theme::muted(),
             );
         }
 
@@ -332,14 +332,14 @@ impl AuraApp {
             egui::Align2::LEFT_TOP,
             truncate(&item.title, 28),
             egui::FontId::proportional(12.5),
-            theme::TEXT,
+            theme::text(),
         );
         painter.text(
             egui::pos2(rect.left() + 2.0, image_rect.bottom() + 26.0),
             egui::Align2::LEFT_TOP,
             format!("{}  {}", item.resolution, item.kind.label()),
             egui::FontId::proportional(10.0),
-            theme::MUTED,
+            theme::muted(),
         );
 
         if response.hovered() {

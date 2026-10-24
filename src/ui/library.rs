@@ -1,4 +1,4 @@
-﻿//! Local library page.
+//! Local library page.
 
 use std::path::Path;
 
@@ -31,7 +31,7 @@ impl AuraApp {
                 ui.add_space(80.0);
                 ui.spinner();
                 ui.add_space(8.0);
-                ui.label(RichText::new(self.strings.scanning).color(theme::MUTED));
+                ui.label(RichText::new(self.strings.scanning).color(theme::muted()));
             });
             return;
         }
@@ -46,13 +46,13 @@ impl AuraApp {
             ui.label(
                 RichText::new(format!("{count} {}", self.strings.items))
                     .size(11.5)
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
             );
             if count != total {
                 ui.label(
                     RichText::new(format!("/ {total}"))
                         .size(11.5)
-                        .color(theme::MUTED),
+                        .color(theme::muted()),
                 );
             }
             if self.scanning {
@@ -89,13 +89,13 @@ impl AuraApp {
     fn library_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             egui::Frame::NONE
-                .fill(theme::CARD)
-                .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                .fill(theme::card())
+                .stroke(Stroke::new(1.0_f32, theme::border()))
                 .corner_radius(9)
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(theme::icon(theme::ICON_SEARCH).color(theme::MUTED));
+                        ui.label(theme::icon(theme::ICON_SEARCH).color(theme::muted()));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.query)
                                 .hint_text(self.strings.search)
@@ -138,7 +138,7 @@ impl AuraApp {
         ui.vertical_centered(|ui| {
             ui.add_space(70.0);
             ui.label(
-                theme::icon_large(theme::ICON_PICTURES, 46.0).color(theme::BORDER),
+                theme::icon_large(theme::ICON_PICTURES, 46.0).color(theme::border()),
             );
             ui.add_space(10.0);
             ui.label(RichText::new(self.strings.empty_library).size(18.0).strong());
@@ -146,7 +146,7 @@ impl AuraApp {
             ui.label(
                 RichText::new(self.strings.empty_library_hint)
                     .size(12.0)
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
             );
             ui.add_space(16.0);
             ui.horizontal(|ui| {
@@ -167,7 +167,7 @@ impl AuraApp {
             ui.label(
                 RichText::new(self.strings.drop_files_hint)
                     .size(11.5)
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
             );
         });
     }
@@ -271,7 +271,7 @@ pub fn draw_card(
 
     let painter = ui.painter();
     let radius = 12;
-    painter.rect_filled(rect, radius, theme::CARD);
+    painter.rect_filled(rect, radius, theme::card());
 
     let image_rect = Rect::from_min_size(
         rect.min + Vec2::splat(1.0),
@@ -290,7 +290,7 @@ pub fn draw_card(
                 Align2::CENTER_CENTER,
                 info.kind_label,
                 FontId::proportional(11.0),
-                theme::MUTED,
+                theme::muted(),
             );
         }
     }
@@ -350,7 +350,7 @@ pub fn draw_card(
             Align2::CENTER_CENTER,
             "APPLIED",
             FontId::proportional(8.5),
-            Color32::from_rgb(10, 11, 15),
+            theme::contrast_on(info.accent),
         );
     } else if info.favorite || response.hovered() {
         let star = if info.favorite {
@@ -378,14 +378,14 @@ pub fn draw_card(
         Align2::LEFT_TOP,
         truncate(info.name, 30),
         FontId::proportional(12.5),
-        theme::TEXT,
+        theme::text(),
     );
     painter.text(
         egui::pos2(rect.left() + 2.0, text_top + 18.0),
         Align2::LEFT_TOP,
         info.folder.unwrap_or(""),
         FontId::proportional(10.0),
-        theme::MUTED,
+        theme::muted(),
     );
 
     if info.applied || response.hovered() {
@@ -435,9 +435,9 @@ fn filter_chip(ui: &mut egui::Ui, app: &mut AuraApp, filter: Filter, label: &str
     let text = RichText::new(label)
         .size(12.0)
         .color(if selected {
-            Color32::from_rgb(10, 11, 15)
+            theme::contrast_on(app.accent)
         } else {
-            theme::MUTED
+            theme::muted()
         });
     let button = egui::Button::new(text)
         .fill(if selected {
@@ -448,7 +448,7 @@ fn filter_chip(ui: &mut egui::Ui, app: &mut AuraApp, filter: Filter, label: &str
         .stroke(if selected {
             Stroke::NONE
         } else {
-            Stroke::new(1.0_f32, theme::BORDER)
+            Stroke::new(1.0_f32, theme::border())
         })
         .corner_radius(20)
         .min_size(Vec2::new(0.0, 26.0));

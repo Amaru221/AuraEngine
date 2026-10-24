@@ -1,4 +1,4 @@
-﻿//! Displays page: virtual desktop map and per-monitor controls.
+//! Displays page: virtual desktop map and per-monitor controls.
 
 use std::path::Path;
 
@@ -57,11 +57,11 @@ impl AuraApp {
         let (canvas, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
         let painter = ui.painter();
 
-        painter.rect_filled(canvas, 14, theme::CARD);
+        painter.rect_filled(canvas, 14, theme::card());
         painter.rect_stroke(
             canvas,
             14,
-            Stroke::new(1.0_f32, theme::BORDER),
+            Stroke::new(1.0_f32, theme::border()),
             StrokeKind::Inside,
         );
 
@@ -72,7 +72,7 @@ impl AuraApp {
                 Align2::CENTER_CENTER,
                 "No displays detected",
                 FontId::proportional(13.0),
-                theme::MUTED,
+                theme::muted(),
             );
             return;
         }
@@ -130,7 +130,7 @@ impl AuraApp {
                     Align2::CENTER_CENTER,
                     monitor.resolution(),
                     FontId::proportional(10.0),
-                    theme::MUTED,
+                    theme::muted(),
                 );
             }
 
@@ -142,7 +142,7 @@ impl AuraApp {
                     if monitor.primary {
                         self.accent
                     } else {
-                        theme::BORDER
+                        theme::border()
                     },
                 ),
                 StrokeKind::Inside,
@@ -166,7 +166,7 @@ impl AuraApp {
                 Align2::CENTER_TOP,
                 label,
                 FontId::proportional(10.0),
-                theme::TEXT,
+                theme::text(),
             );
 
             // Windows display number, matching Settings -> Display -> Identify.
@@ -178,7 +178,7 @@ impl AuraApp {
                     Align2::CENTER_CENTER,
                     number.to_string(),
                     FontId::proportional(12.0),
-                    Color32::from_rgb(16, 18, 24),
+                    theme::contrast_on(self.accent),
                 );
             }
 
@@ -198,8 +198,8 @@ impl AuraApp {
         let title = self.monitor_title(monitor);
         let name = monitor.label();
         egui::Frame::NONE
-            .fill(theme::CARD)
-            .stroke(Stroke::new(1.0_f32, theme::BORDER))
+            .fill(theme::card())
+            .stroke(Stroke::new(1.0_f32, theme::border()))
             .corner_radius(12)
             .inner_margin(egui::Margin::same(16))
             .show(ui, |ui| {
@@ -215,7 +215,7 @@ impl AuraApp {
                         if monitor.primary {
                             self.accent
                         } else {
-                            theme::MUTED
+                            theme::muted()
                         },
                     );
                     ui.vertical(|ui| {
@@ -223,7 +223,7 @@ impl AuraApp {
                             ui.label(RichText::new(&title).strong().size(14.0));
                             if name != title {
                                 ui.label(
-                                    RichText::new(&name).size(11.5).color(theme::MUTED),
+                                    RichText::new(&name).size(11.5).color(theme::muted()),
                                 );
                             }
                             if monitor.primary {
@@ -240,7 +240,7 @@ impl AuraApp {
                                 self.strings.resolution
                             ))
                             .size(10.5)
-                            .color(theme::MUTED),
+                            .color(theme::muted()),
                         );
                     });
 
@@ -274,7 +274,7 @@ impl AuraApp {
                     ui.label(
                         RichText::new(self.strings.current_wallpaper)
                             .size(11.0)
-                            .color(theme::MUTED),
+                            .color(theme::muted()),
                     );
                     let current = self.cfg.assignment_for(&monitor.key).cloned();
                     match current {
@@ -288,7 +288,7 @@ impl AuraApp {
                                         .to_string_lossy(),
                                 )
                                 .size(11.5)
-                                .color(theme::TEXT),
+                                .color(theme::text()),
                             );
                             super::pill(
                                 ui,
@@ -301,7 +301,7 @@ impl AuraApp {
                             );
                         }
                         None => {
-                            ui.label(RichText::new(self.strings.none).size(11.5).color(theme::MUTED));
+                            ui.label(RichText::new(self.strings.none).size(11.5).color(theme::muted()));
                         }
                     }
 
@@ -335,7 +335,7 @@ impl AuraApp {
                         ui.label(
                             RichText::new(strings.scaling)
                                 .size(11.0)
-                                .color(theme::MUTED),
+                                .color(theme::muted()),
                         );
 
                         if scaling != previous {

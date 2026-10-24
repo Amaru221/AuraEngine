@@ -1,19 +1,169 @@
-﻿//! Visual theme: palette extraction, fonts and egui styling.
+﻿//! Visual theme: palette, fonts and egui styling.
 #![allow(dead_code)]
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Visuals};
 
-pub const BG: Color32 = Color32::from_rgb(10, 11, 15);
-pub const PANEL: Color32 = Color32::from_rgb(15, 17, 23);
-pub const CARD: Color32 = Color32::from_rgb(22, 25, 34);
-pub const CARD_HOVER: Color32 = Color32::from_rgb(30, 34, 46);
-pub const BORDER: Color32 = Color32::from_rgb(38, 43, 56);
-pub const TEXT: Color32 = Color32::from_rgb(231, 235, 244);
-pub const MUTED: Color32 = Color32::from_rgb(148, 156, 174);
-pub const DANGER: Color32 = Color32::from_rgb(235, 94, 94);
+use crate::config::ThemePreset;
+
+/// A complete set of surface/text colors. The accent is kept separate so it
+/// can follow the wallpaper or a user-picked color.
+#[derive(Clone, Copy, Debug)]
+pub struct Palette {
+    pub bg: Color32,
+    pub panel: Color32,
+    pub card: Color32,
+    pub card_hover: Color32,
+    pub border: Color32,
+    pub text: Color32,
+    pub muted: Color32,
+    pub danger: Color32,
+    pub light: bool,
+}
+
+impl Palette {
+    pub const DARK: Self = Self {
+        bg: Color32::from_rgb(10, 11, 15),
+        panel: Color32::from_rgb(15, 17, 23),
+        card: Color32::from_rgb(22, 25, 34),
+        card_hover: Color32::from_rgb(30, 34, 46),
+        border: Color32::from_rgb(38, 43, 56),
+        text: Color32::from_rgb(231, 235, 244),
+        muted: Color32::from_rgb(148, 156, 174),
+        danger: Color32::from_rgb(235, 94, 94),
+        light: false,
+    };
+
+    pub const MIDNIGHT: Self = Self {
+        bg: Color32::from_rgb(6, 9, 20),
+        panel: Color32::from_rgb(10, 14, 28),
+        card: Color32::from_rgb(16, 22, 40),
+        card_hover: Color32::from_rgb(23, 31, 54),
+        border: Color32::from_rgb(34, 45, 74),
+        text: Color32::from_rgb(226, 233, 248),
+        muted: Color32::from_rgb(137, 150, 178),
+        danger: Color32::from_rgb(240, 100, 110),
+        light: false,
+    };
+
+    pub const LIGHT: Self = Self {
+        bg: Color32::from_rgb(244, 246, 250),
+        panel: Color32::from_rgb(252, 253, 255),
+        card: Color32::from_rgb(255, 255, 255),
+        card_hover: Color32::from_rgb(238, 242, 249),
+        border: Color32::from_rgb(210, 216, 228),
+        text: Color32::from_rgb(28, 32, 42),
+        muted: Color32::from_rgb(100, 108, 124),
+        danger: Color32::from_rgb(200, 55, 65),
+        light: true,
+    };
+
+    /// Derives a coherent palette from a custom background color.
+    pub fn custom(bg: Color32) -> Self {
+        let light = luminance(bg) > 0.55;
+        let (panel_amount, card_amount, hover_amount, border_amount) = if light {
+            (-0.04, 0.05, 0.09, -0.16)
+        } else {
+            (0.04, 0.08, 0.14, 0.18)
+        };
+        Self {
+            bg,
+            panel: shade(bg, panel_amount),
+            card: shade(bg, card_amount),
+            card_hover: shade(bg, hover_amount),
+            border: shade(bg, border_amount),
+            text: if light {
+                Color32::from_rgb(26, 30, 40)
+            } else {
+                Color32::from_rgb(231, 235, 244)
+            },
+            muted: if light {
+                Color32::from_rgb(96, 104, 120)
+            } else {
+                Color32::from_rgb(148, 156, 174)
+            },
+            danger: if light {
+                Color32::from_rgb(200, 55, 65)
+            } else {
+                Color32::from_rgb(235, 94, 94)
+            },
+            light,
+        }
+    }
+}
+
+fn luminance(color: Color32) -> f32 {
+    let [r, g, b, _] = color.to_array();
+    (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) / 255.0
+}
+
+fn shade(color: Color32, amount: f32) -> Color32 {
+    let [r, g, b, _] = color.to_array();
+    let adjust = |c: u8| {
+        let c = c as f32;
+        if amount >= 0.0 {
+            (c + (255.0 - c) * amount).clamp(0.0, 255.0) as u8
+        } else {
+            (c * (1.0 + amount)).clamp(0.0, 255.0) as u8
+        }
+    };
+    Color32::from_rgb(adjust(r), adjust(g), adjust(b))
+}
+
+static PALETTE: RwLock<Palette> = RwLock::new(Palette::DARK);
+
+pub fn set_preset(preset: ThemePreset, custom_bg: Option<[u8; 3]>) {
+    let palette = match preset {
+        ThemePreset::Dark => Palette::DARK,
+        ThemePreset::Midnight => Palette::MIDNIGHT,
+        ThemePreset::Light => Palette::LIGHT,
+        ThemePreset::Custom => {
+            let [r, g, b] = custom_bg.unwrap_or([18, 20, 28]);
+            Palette::custom(Color32::from_rgb(r, g, b))
+        }
+    };
+    *PALETTE.write().unwrap_or_else(|e| e.into_inner()) = palette;
+}
+
+pub fn palette() -> Palette {
+    *PALETTE.read().unwrap_or_else(|e| e.into_inner())
+}
+
+pub fn bg() -> Color32 {
+    palette().bg
+}
+pub fn panel() -> Color32 {
+    palette().panel
+}
+pub fn card() -> Color32 {
+    palette().card
+}
+pub fn card_hover() -> Color32 {
+    palette().card_hover
+}
+pub fn border() -> Color32 {
+    palette().border
+}
+pub fn text() -> Color32 {
+    palette().text
+}
+pub fn muted() -> Color32 {
+    palette().muted
+}
+pub fn danger() -> Color32 {
+    palette().danger
+}
+
+/// Black or white, whichever is more legible on `color`.
+pub fn contrast_on(color: Color32) -> Color32 {
+    if luminance(color) > 0.55 {
+        Color32::from_rgb(14, 16, 22)
+    } else {
+        Color32::WHITE
+    }
+}
 
 pub const ICON_PLAY: &str = "\u{E768}";
 pub const ICON_PAUSE: &str = "\u{E769}";
@@ -40,6 +190,7 @@ pub const ICON_CHEVRON_LEFT: &str = "\u{E76B}";
 pub const ICON_CHEVRON_RIGHT: &str = "\u{E76C}";
 pub const ICON_OPEN: &str = "\u{E8A7}";
 pub const ICON_SPARKLE: &str = "\u{E945}";
+pub const ICON_UPDATE: &str = "\u{E895}";
 
 pub fn icon(text: &str) -> egui::RichText {
     egui::RichText::new(text).font(FontId::new(15.0, FontFamily::Name("icons".into())))
@@ -109,39 +260,48 @@ pub fn install_fonts(ctx: &egui::Context) {
 }
 
 pub fn apply(ctx: &egui::Context, accent: Color32) {
-    let mut visuals = Visuals::dark();
+    let palette = palette();
+    let mut visuals = if palette.light {
+        Visuals::light()
+    } else {
+        Visuals::dark()
+    };
 
-    visuals.panel_fill = BG;
-    visuals.window_fill = PANEL;
-    visuals.extreme_bg_color = Color32::from_rgb(7, 8, 11);
-    visuals.faint_bg_color = CARD;
-    visuals.code_bg_color = CARD;
-    visuals.override_text_color = Some(TEXT);
+    visuals.panel_fill = palette.bg;
+    visuals.window_fill = palette.panel;
+    visuals.extreme_bg_color = if palette.light {
+        palette.card
+    } else {
+        Color32::from_rgb(7, 8, 11)
+    };
+    visuals.faint_bg_color = palette.card;
+    visuals.code_bg_color = palette.card;
+    visuals.override_text_color = Some(palette.text);
     visuals.hyperlink_color = accent;
     visuals.warn_fg_color = Color32::from_rgb(240, 190, 90);
-    visuals.error_fg_color = DANGER;
-    visuals.window_stroke = Stroke::new(1.0_f32, BORDER);
+    visuals.error_fg_color = palette.danger;
+    visuals.window_stroke = Stroke::new(1.0_f32, palette.border);
     visuals.window_corner_radius = CornerRadius::same(14);
     visuals.menu_corner_radius = CornerRadius::same(10);
     visuals.selection.bg_fill = accent.gamma_multiply(0.38);
     visuals.selection.stroke = Stroke::new(1.0_f32, accent);
 
-    visuals.widgets.noninteractive.bg_fill = CARD;
-    visuals.widgets.noninteractive.weak_bg_fill = CARD;
-    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER);
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT);
+    visuals.widgets.noninteractive.bg_fill = palette.card;
+    visuals.widgets.noninteractive.weak_bg_fill = palette.card;
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, palette.border);
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, palette.text);
     visuals.widgets.noninteractive.corner_radius = CornerRadius::same(10);
 
-    visuals.widgets.inactive.bg_fill = CARD;
-    visuals.widgets.inactive.weak_bg_fill = CARD;
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, BORDER);
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, TEXT);
+    visuals.widgets.inactive.bg_fill = palette.card;
+    visuals.widgets.inactive.weak_bg_fill = palette.card;
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.border);
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, palette.text);
     visuals.widgets.inactive.corner_radius = CornerRadius::same(10);
 
-    visuals.widgets.hovered.bg_fill = CARD_HOVER;
-    visuals.widgets.hovered.weak_bg_fill = CARD_HOVER;
+    visuals.widgets.hovered.bg_fill = palette.card_hover;
+    visuals.widgets.hovered.weak_bg_fill = palette.card_hover;
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, accent.gamma_multiply(0.75));
-    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, palette.text);
     visuals.widgets.hovered.corner_radius = CornerRadius::same(10);
 
     visuals.widgets.active.bg_fill = accent.gamma_multiply(0.55);
@@ -150,9 +310,9 @@ pub fn apply(ctx: &egui::Context, accent: Color32) {
     visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
     visuals.widgets.active.corner_radius = CornerRadius::same(10);
 
-    visuals.widgets.open.bg_fill = CARD_HOVER;
-    visuals.widgets.open.weak_bg_fill = CARD_HOVER;
-    visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, BORDER);
+    visuals.widgets.open.bg_fill = palette.card_hover;
+    visuals.widgets.open.weak_bg_fill = palette.card_hover;
+    visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, palette.border);
     visuals.widgets.open.corner_radius = CornerRadius::same(10);
 
     ctx.set_visuals(visuals);
@@ -247,5 +407,15 @@ mod tests {
         let (color, _) = accent_from_dynamic(&image::DynamicImage::ImageRgb8(img));
         assert!(color.r() > color.g());
     }
-}
 
+    #[test]
+    fn custom_palettes_pick_contrasting_text() {
+        let dark = Palette::custom(Color32::from_rgb(18, 20, 28));
+        assert!(!dark.light);
+        assert!(dark.text.r() > 200);
+
+        let light = Palette::custom(Color32::from_rgb(240, 242, 248));
+        assert!(light.light);
+        assert!(light.text.r() < 80);
+    }
+}

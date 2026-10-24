@@ -12,6 +12,7 @@ mod scanner;
 mod theme;
 mod tray;
 mod ui;
+mod update;
 mod util;
 
 fn main() {

@@ -1,4 +1,4 @@
-﻿//! Quick switcher HUD, rendered as a borderless always-on-top viewport.
+//! Quick switcher HUD, rendered as a borderless always-on-top viewport.
 
 use std::collections::HashMap;
 
@@ -140,7 +140,7 @@ impl AuraApp {
                             Align2::CENTER_CENTER,
                             theme::ICON_CLOSE,
                             FontId::new(13.0, egui::FontFamily::Name("icons".into())),
-                            theme::TEXT,
+                            theme::text(),
                         );
                         if ui
                             .interact(close_rect, egui::Id::new("hud-close"), Sense::click())
@@ -255,7 +255,7 @@ impl AuraApp {
                             Align2::CENTER_CENTER,
                             crate::ui::library::truncate(&current.name, 52),
                             FontId::proportional(26.0),
-                            theme::TEXT,
+                            theme::text(),
                         );
                         painter.text(
                             egui::pos2(screen.center().x, screen.top() + 103.0),
@@ -268,7 +268,7 @@ impl AuraApp {
                                 len
                             ),
                             FontId::proportional(10.5),
-                            theme::MUTED,
+                            theme::muted(),
                         );
                         if style == HudStyle::Grid {
                             painter.text(
@@ -326,7 +326,7 @@ impl AuraApp {
                             Align2::CENTER_CENTER,
                             strings.hud_hint,
                             FontId::proportional(9.5),
-                            theme::MUTED,
+                            theme::muted(),
                         );
                     });
             },
@@ -508,7 +508,7 @@ fn draw_honeycomb(
                 if hovered && enabled {
                     accent.gamma_multiply(0.6)
                 } else {
-                    theme::BORDER
+                    theme::border()
                 },
             ),
             StrokeKind::Inside,
@@ -526,10 +526,10 @@ fn draw_honeycomb(
                 if hovered {
                     accent
                 } else {
-                    theme::TEXT
+                    theme::text()
                 }
             } else {
-                theme::BORDER
+                theme::border()
             },
         );
         if enabled
@@ -570,9 +570,9 @@ fn draw_honeycomb(
                 if active {
                     accent
                 } else if hovered {
-                    theme::TEXT
+                    theme::text()
                 } else {
-                    theme::MUTED.gamma_multiply(0.6)
+                    theme::muted().gamma_multiply(0.6)
                 },
             );
             if ui
@@ -645,7 +645,7 @@ fn paint_hex(
     } else {
         painter.add(Shape::convex_polygon(
             points.to_vec(),
-            theme::CARD,
+            theme::card(),
             Stroke::NONE,
         ));
     }
@@ -666,7 +666,7 @@ fn paint_hex(
             } else if hovered {
                 accent.gamma_multiply(0.7)
             } else {
-                theme::BORDER
+                theme::border()
             },
         ),
     ));
@@ -852,7 +852,7 @@ fn draw_dock(
     painter.rect_stroke(
         dock_rect,
         22,
-        Stroke::new(1.0_f32, theme::BORDER),
+        Stroke::new(1.0_f32, theme::border()),
         StrokeKind::Inside,
     );
 
@@ -922,7 +922,7 @@ fn paint_card(
     alpha: u8,
 ) {
     let painter = ui.painter();
-    painter.rect_filled(rect, 12, theme::CARD);
+    painter.rect_filled(rect, 12, theme::card());
 
     if let Some((texture, aspect)) = thumb {
         let uv = cover_uv(*aspect, rect);
@@ -944,7 +944,7 @@ fn paint_card(
             if selected {
                 accent
             } else {
-                theme::BORDER
+                theme::border()
             },
         ),
         StrokeKind::Inside,
@@ -989,7 +989,7 @@ fn paint_skewed(
         mesh.indices = vec![0, 1, 2, 0, 2, 3];
         painter.add(Shape::mesh(mesh));
     } else {
-        painter.rect_filled(rect, 12, theme::CARD.gamma_multiply(fade));
+        painter.rect_filled(rect, 12, theme::card().gamma_multiply(fade));
     }
 
     let outline = [
@@ -1005,7 +1005,7 @@ fn paint_skewed(
             if selected {
                 accent.gamma_multiply(fade)
             } else {
-                theme::BORDER.gamma_multiply(fade.max(0.35))
+                theme::border().gamma_multiply(fade.max(0.35))
             },
         ),
     ));

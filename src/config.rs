@@ -105,6 +105,16 @@ pub enum HudStyle {
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+pub enum ThemePreset {
+    #[default]
+    Dark,
+    Midnight,
+    Light,
+    Custom,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum ParentMode {
     #[default]
     Auto,
@@ -215,6 +225,9 @@ pub struct Config {
 
     pub accent_from_wallpaper: bool,
     pub apply_windows_accent: bool,
+    pub accent_color: Option<[u8; 3]>,
+    pub theme_preset: ThemePreset,
+    pub theme_bg: Option<[u8; 3]>,
     pub hud_style: HudStyle,
     pub parent_mode: ParentMode,
 
@@ -251,6 +264,9 @@ impl Default for Config {
             close_to_tray: true,
             accent_from_wallpaper: true,
             apply_windows_accent: false,
+            accent_color: None,
+            theme_preset: ThemePreset::Dark,
+            theme_bg: None,
             hud_style: HudStyle::Grid,
             parent_mode: ParentMode::Auto,
             mpv_path: None,

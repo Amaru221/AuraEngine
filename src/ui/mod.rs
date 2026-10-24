@@ -19,7 +19,7 @@ pub fn main_ui(app: &mut AuraApp, ctx: &egui::Context) {
         .resizable(false)
         .frame(
             egui::Frame::NONE
-                .fill(theme::PANEL)
+                .fill(theme::panel())
                 .inner_margin(egui::Margin::symmetric(16, 18)),
         )
         .show(ctx, |ui| {
@@ -29,7 +29,7 @@ pub fn main_ui(app: &mut AuraApp, ctx: &egui::Context) {
     egui::CentralPanel::default()
         .frame(
             egui::Frame::NONE
-                .fill(theme::BG)
+                .fill(theme::bg())
                 .inner_margin(egui::Margin::symmetric(26, 22)),
         )
         .show(ctx, |ui| {
@@ -78,7 +78,7 @@ fn sidebar(app: &mut AuraApp, ui: &mut egui::Ui) {
             ui.label(
                 RichText::new(app.strings.tagline)
                     .size(10.5)
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
             );
         });
     });
@@ -96,7 +96,7 @@ fn sidebar(app: &mut AuraApp, ui: &mut egui::Ui) {
         ui.label(
             RichText::new(format!("v{} - GPL-3.0", env!("CARGO_PKG_VERSION")))
                 .size(10.5)
-                .color(theme::MUTED),
+                .color(theme::muted()),
         );
         ui.add_space(10.0);
 
@@ -129,22 +129,22 @@ fn sidebar(app: &mut AuraApp, ui: &mut egui::Ui) {
         } else if running > 0 {
             (app.strings.playing, Color32::from_rgb(96, 210, 150), None)
         } else {
-            (app.strings.idle, theme::MUTED, None)
+            (app.strings.idle, theme::muted(), None)
         };
         let pill = egui::Frame::NONE
-            .fill(theme::CARD)
+            .fill(theme::card())
             .corner_radius(9)
             .inner_margin(egui::Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let (rect, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
                     ui.painter().circle_filled(rect.center(), 4.0, color);
-                    ui.label(RichText::new(label).size(12.0).color(theme::TEXT));
+                    ui.label(RichText::new(label).size(12.0).color(theme::text()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new(format!("{running}"))
                                 .size(12.0)
-                                .color(theme::MUTED),
+                                .color(theme::muted()),
                         );
                     });
                 });
@@ -154,7 +154,7 @@ fn sidebar(app: &mut AuraApp, ui: &mut egui::Ui) {
             ui.label(
                 RichText::new(format!("{}: {reason}", app.strings.pause_reason))
                     .size(10.0)
-                    .color(theme::MUTED),
+                    .color(theme::muted()),
             );
         }
     });
@@ -173,12 +173,11 @@ fn nav_item(app: &mut AuraApp, ui: &mut egui::Ui, nav: Nav, icon: &str, label: &
             app.accent,
         );
     } else if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, 10, Color32::from_rgb(24, 27, 36));
+        ui.painter().rect_filled(rect, 10, theme::card_hover());
     }
 
-    let color = if selected { theme::TEXT } else { theme::MUTED };
-    let icon_color = if selected { app.accent } else { theme::MUTED };
+    let color = if selected { theme::text() } else { theme::muted() };
+    let icon_color = if selected { app.accent } else { theme::muted() };
     ui.painter().text(
         rect.left_center() + Vec2::new(16.0, 0.0),
         Align2::LEFT_CENTER,
@@ -210,16 +209,12 @@ pub fn icon_button(
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let fill = if response.hovered() {
-        theme::CARD_HOVER
+        theme::card_hover()
     } else {
-        theme::CARD
+        theme::card()
     };
     ui.painter().rect_filled(rect, 9, fill);
-    let color = if response.hovered() {
-        Color32::WHITE
-    } else {
-        theme::TEXT
-    };
+    let color = theme::text();
     ui.painter().text(
         rect.center(),
         Align2::CENTER_CENTER,
@@ -243,8 +238,9 @@ pub fn pill(ui: &mut egui::Ui, text: &str, color: Color32) {
 
 pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let accent = ui.visuals().hyperlink_color;
+    let text_color = theme::contrast_on(accent);
     ui.add(
-        egui::Button::new(RichText::new(text).color(Color32::from_rgb(10, 11, 15)).strong())
+        egui::Button::new(RichText::new(text).color(text_color).strong())
             .fill(accent)
             .stroke(Stroke::NONE)
             .corner_radius(9)
@@ -254,8 +250,8 @@ pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
 
 fn mpv_banner(app: &mut AuraApp, ui: &mut egui::Ui) {
     egui::Frame::NONE
-        .fill(Color32::from_rgb(46, 36, 18))
-        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(120, 92, 38)))
+        .fill(theme::card())
+        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(214, 170, 70)))
         .corner_radius(10)
         .inner_margin(egui::Margin::symmetric(14, 10))
         .show(ui, |ui| {
@@ -265,12 +261,12 @@ fn mpv_banner(app: &mut AuraApp, ui: &mut egui::Ui) {
                     ui.label(
                         RichText::new(app.strings.mpv_not_found)
                             .strong()
-                            .color(theme::TEXT),
+                            .color(theme::text()),
                     );
                     ui.label(
                         RichText::new(app.strings.mpv_not_found_hint)
                             .size(11.5)
-                            .color(theme::MUTED),
+                            .color(theme::muted()),
                     );
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -313,7 +309,7 @@ fn toast(app: &mut AuraApp, ctx: &egui::Context) {
     };
     let color = match toast.kind {
         ToastKind::Info => app.accent,
-        ToastKind::Error => theme::DANGER,
+        ToastKind::Error => theme::danger(),
     };
     let text = toast.text.clone();
     egui::Area::new(egui::Id::new("aura-toast"))
@@ -321,7 +317,7 @@ fn toast(app: &mut AuraApp, ctx: &egui::Context) {
         .interactable(false)
         .show(ctx, |ui| {
             egui::Frame::NONE
-                .fill(Color32::from_rgb(24, 27, 36))
+                .fill(theme::card())
                 .stroke(Stroke::new(1.0_f32, color.gamma_multiply(0.7)))
                 .corner_radius(10)
                 .inner_margin(egui::Margin::symmetric(16, 10))
@@ -336,7 +332,7 @@ fn toast(app: &mut AuraApp, ctx: &egui::Context) {
                         let (rect, _) =
                             ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
                         ui.painter().circle_filled(rect.center(), 4.0, color);
-                        ui.label(RichText::new(text).size(13.0).color(theme::TEXT));
+                        ui.label(RichText::new(text).size(13.0).color(theme::text()));
                     });
                 });
         });
@@ -371,8 +367,8 @@ fn drop_overlay(ctx: &egui::Context) {
 pub fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
-            ui.label(RichText::new(title).size(24.0).strong());
-            ui.label(RichText::new(subtitle).size(12.0).color(theme::MUTED));
+            ui.label(RichText::new(title).size(24.0).strong().color(theme::text()));
+            ui.label(RichText::new(subtitle).size(12.0).color(theme::muted()));
         });
     });
     ui.add_space(16.0);
@@ -384,13 +380,13 @@ pub fn section_card<R>(
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     egui::Frame::NONE
-        .fill(theme::CARD)
-        .stroke(Stroke::new(1.0_f32, theme::BORDER))
+        .fill(theme::card())
+        .stroke(Stroke::new(1.0_f32, theme::border()))
         .corner_radius(12)
         .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new(title).size(13.0).strong().color(theme::TEXT));
+            ui.label(RichText::new(title).size(13.0).strong().color(theme::text()));
             ui.add_space(10.0);
             add_contents(ui)
         })
