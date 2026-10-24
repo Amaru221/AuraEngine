@@ -1,0 +1,31 @@
+Aura Engine
+Copyright (C) 2026 Amaru221 and contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+---------------------------------------------------------------------------
+
+Aura Engine is a Windows port of Aura:
+
+  Aura - https://github.com/antwny/aura
+  Copyright (C) antwny and contributors
+  Licensed under GPL-3.0-or-later.
+
+The original Aura source was used as the reference for this port. The
+Windows implementation, WorkerW hosting, mpv integration, egui interface
+and CLI are new code, while some modules (notably the MotionBGS catalog
+parser and the palette extraction algorithm) are adapted from the
+original GPL-3.0-or-later code.
+
+See THIRD_PARTY_LICENSES.md for the other components.

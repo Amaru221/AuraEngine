@@ -1,0 +1,336 @@
+# Aura Engine para Windows
+
+Port nativo a **Windows 10/11 (x64)** de [Aura](https://github.com/antwny/aura), el motor de fondos de pantalla animados escrito en Rust para COSMIC Desktop.
+
+Aura Engine pinta vídeos y fondos estáticos **detrás de los iconos del escritorio**, con multi-monitor real, pausa automática en juegos a pantalla completa, bandeja del sistema, atajos globales y un selector rápido (HUD) con tres estilos.
+
+```
+UI (egui)  ──►  WorkerW (capa del escritorio)  ──►  mpv --wid  ──►  vídeo
+    │                    ▲
+    └── named pipe ──────┘  IPC de mpv + configuración JSON
+```
+
+---
+
+## Características
+
+- **Vídeo animado detrás de los iconos** mediante la técnica `WorkerW`/`Progman` de Windows. Sin ventanas encima del escritorio.
+- **Multi-monitor**: una instancia de mpv por pantalla, con posición, DPI y resolución independientes. Reconexión automática al conectar/desconectar pantallas o al reiniciar Explorer.
+- **Fondos estáticos nativos** con `IDesktopWallpaper`, incluido restaurado del fondo original.
+- **Auto-pausa inteligente**:
+  - juegos/apps D3D a pantalla completa (`SHQueryUserNotificationState`),
+  - escritorio cubierto por ventanas (oclusión real enumerando ventanas),
+  - batería (`GetSystemPowerStatus`).
+- **Audio**: volumen y mute por IPC de mpv.
+- **Selector rápido (HUD)** con tres estilos: cuadrícula, cinematográfico y dock. Navegación con teclado, rueda y ratón.
+- **Bandeja del sistema** con menú completo.
+- **Atajos globales** (Ctrl+Alt+…).
+- **Biblioteca local** con miniaturas (mpv extrae el primer fotograma), búsqueda, filtros y favoritos.
+- **Catálogos online**: Wallhaven, Bing Daily, **MotionBGS** (live wallpapers 4K/1080p) y Pexels (clave opcional).
+- **Tema dinámico**: extrae el color dominante del fondo y adapta la interfaz; opcionalmente tiñe el acento de Windows (best-effort).
+- **CLI completa** e **instancia única** mediante named pipe.
+- **Auto-descarga de mpv** portable desde GitHub si no está instalado.
+- **Rendimiento**: arranque/parada de mpv en segundo plano, detección de oclusión en un hilo aparte y miniaturas cacheadas (la UI nunca se bloquea).
+
+---
+
+## Descargas
+
+Cada release publica dos artefactos:
+
+- `aura-vX-windows-x64.exe` — ejecutable portable.
+- `aura-vX-windows-x64.zip` — ejecutable + `install.ps1`/`uninstall.ps1` + documentación + certificado público.
+
+https://github.com/Amaru221/AuraEngine/releases
+
+El `.exe` portable descarga mpv automáticamente en el primer uso si no lo encuentra.
+
+---
+
+## Instalación
+
+### Opción A — Instalador (recomendada)
+
+Descomprime el ZIP de release y ejecuta:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -TrustCertificate
+```
+
+Instala en `%LOCALAPPDATA%\Aura\bin`, crea un acceso directo en el menú Inicio, confía en el certificado autofirmado y arranca Aura.
+
+Opciones: `-NoStart`, `-NoShortcut`, `-DownloadMpv`.
+
+### Opción B — Portable
+
+```powershell
+cd .\dist\aura-v1.0.7-windows-x64
+.\aura.exe
+```
+
+Funciona sin instalar: `mpv.exe` se detecta junto al ejecutable. La configuración se guarda en `%APPDATA%\Aura`.
+
+### Opción C — Compilar desde el código
+
+Requisitos: **Rust stable (MSVC)** y **Visual Studio Build Tools** con el SDK de Windows.
+
+```powershell
+git clone https://github.com/Amaru221/AuraEngine.git AuraEngine
+cd AuraEngine
+cargo build --release
+.\target\release\aura.exe
+```
+
+### Opción D — Empaquetar un ZIP
+
+```powershell
+.\scripts\build.ps1 -Sign
+```
+
+Genera `dist\aura-v1.0.7-windows-x64.zip`.
+
+---
+
+## Uso
+
+### Bandeja del sistema
+
+Clic izquierdo: abrir Aura. Clic derecho: abrir, siguiente/anterior, pausar, selector rápido, detener y salir.
+
+Al cerrar la ventana, Aura sigue en la bandeja (configurable).
+
+### CLI
+
+```text
+aura [comando]
+aura <archivo> [--monitor \\.\DISPLAY1]
+
+next                 Siguiente fondo de la biblioteca
+prev                 Fondo anterior
+apply <archivo>      Aplica un vídeo o imagen
+pause | resume       Pausa / reanuda
+toggle-pause         Alterna la pausa
+stop                 Detiene y restaura el fondo original
+switcher             Abre/cierra el selector rápido
+show                 Muestra la ventana
+settings             Abre Ajustes
+library | explore | monitors | about   Abre esa sección
+rescan               Reescanear la biblioteca
+status               Estado actual
+doctor               Diagnóstico (pantallas, mpv, capa WorkerW)
+install-mpv          Descarga mpv portable
+set-wallpaper <img> [índice]   Fondo estático (prueba/diagnóstico)
+motionbgs <categoria>          Abre Explorar en una categoría de MotionBGS
+search-motionbgs <texto> [--category id]    Busca en MotionBGS
+download-motionbgs <texto> [--category id]  Descarga el primer resultado
+                              ids: all, anime, games, 4k, superhero, nature
+quit                 Cierra Aura
+```
+
+Si Aura no está en ejecución, los comandos que lo necesitan arrancan una instancia oculta en la bandeja.
+
+### Atajos globales
+
+| Acción | Atajo |
+| --- | --- |
+| Selector rápido | `Ctrl + Alt + W` |
+| Siguiente | `Ctrl + Alt + →` |
+| Anterior | `Ctrl + Alt + ←` |
+| Pausa / reanudar | `Ctrl + Alt + Espacio` |
+| Detener | `Ctrl + Alt + S` |
+
+Dentro del HUD: flechas/WASD, `Enter` aplicar, `Espacio` pausa, `F` favorito, `Esc` cerrar.
+
+---
+
+## Catálogos online
+
+| Fuente | Contenido | Clave |
+| --- | --- | --- |
+| **MotionBGS** | Live wallpapers 4K y 1080p + categorías Anime, Games, 4K, Superhero y Nature | No |
+| **Wallhaven** | Fondos estáticos UHD | Opcional (SFW sin clave) |
+| **Bing Daily** | 8 fondos UHD del día | No |
+| **Pexels** | Vídeos y fotos | Sí (gratuita) |
+
+MotionBGS se obtiene mediante scraping de sus tarjetas HTML (igual que el Aura original) y la descarga usa los endpoints `/dl/4k/{id}/` y `/dl/hd/{id}/`.
+
+Dentro de **Explorar → MotionBGS** hay chips de categoría:
+
+- **Todos** (`motionbgs.com/`)
+- **Anime** (`/tag:anime/`)
+- **Games** (`/tag:games/`)
+- **4K** (`/4k/`)
+- **Superhero** (`/tag:superhero/`)
+- **Nature** (`/tag:nature/`)
+
+La búsqueda por texto es global; al escribir una búsqueda se vuelve a la categoría *Todos*.
+
+---
+
+## Cómo funciona
+
+1. **Ventana anfitriona**: por cada monitor con vídeo se crea una ventana hija sin bordes y click-through.
+2. **Capa del escritorio**: se envía `0x052C` a `Progman` para que Explorer cree la capa `WorkerW`; la ventana se reparenta a esa capa (en Windows 11 24H2+ suele ser un `WorkerW` hijo de `Progman`).
+3. **mpv embebido**: se lanza `mpv.exe --wid=<HWND>` con `--loop-file=inf`, `--no-config` y `--input-ipc-server=\\.\pipe\aura-…`.
+4. **IPC**: comandos JSON por named pipe. La conexión y el escritor corren en hilos aparte, así que la UI nunca espera a mpv.
+5. **Pausa**: un hilo independiente consulta fullscreen, oclusión y batería; la UI solo aplica el último estado.
+6. **Estáticos**: se aplican con `IDesktopWallpaper::SetWallpaper` una sola vez. No se recrean hosts ni se reaplican, evitando el bucle con `WorkerW`.
+
+### Por qué no se reutilizó `mpvpaper`
+
+`mpvpaper` depende de `wlr-layer-shell` (Wayland) y de sockets Unix. En Windows el equivalente es `mpv --wid` sobre `WorkerW`, que es exactamente lo que implementa este port.
+
+---
+
+## Configuración
+
+| Ruta | Contenido |
+| --- | --- |
+| `%APPDATA%\Aura\config.json` | Configuración y asignaciones por monitor |
+| `%LOCALAPPDATA%\Aura\bin\mpv.exe` | mpv portable descargado |
+| `%LOCALAPPDATA%\Aura\cache\thumbs` | Miniaturas |
+| `%LOCALAPPDATA%\Aura\wallpapers\online` | Descargas de los catálogos |
+| `%LOCALAPPDATA%\Aura\logs` | `aura.log` y logs de mpv |
+
+La configuración se guarda de forma atómica y se recupera automáticamente si se corrompe.
+
+---
+
+## Solución de problemas
+
+**El fondo aparece por encima de los iconos**
+Ajustes → Rendimiento → *Modo de composición* → **Progman**. Vuelve a aplicar el fondo.
+
+**No se reproducen vídeos**
+Ajustes → Motor: comprueba que mpv está detectado. Usa *Descargar mpv* o indica un `mpv.exe`. Revisa `%LOCALAPPDATA%\Aura\logs\mpv-*.log`.
+
+**El fondo se pausa constantemente**
+Desactiva *Pausar cuando el escritorio está tapado* o *Pausar en juegos a pantalla completa* en Ajustes → Rendimiento.
+
+**La UI va lenta**
+La versión 1.0.4+ evita el trabajo pesado por frame (versión de mpv cacheada, miniaturas con clave cacheada, sin clonar la biblioteca completa). Si persiste, revisa el consumo con:
+
+```powershell
+$p = Get-Process aura | Select-Object -First 1
+$c = $p.CPU
+Start-Sleep 6
+$p.Refresh()
+"CPU en 6 s: $([math]::Round($p.CPU - $c, 2))"
+```
+
+**Windows Defender / SmartScreen**
+El ejecutable está firmado con un certificado autofirmado. Usa `install.ps1 -TrustCertificate` o compila desde el código.
+
+---
+
+## Desarrollo
+
+```powershell
+cargo check
+cargo test
+cargo build --release
+```
+
+Estructura:
+
+```text
+src/
+  main.rs            arranque, CLI vs GUI, instancia única
+  app.rs             estado, orquestación, IPC, auto-pausa
+  cli.rs             interfaz de línea de comandos
+  config.rs          configuración serde + rutas
+  engine/
+    mpv.rs           proceso mpv, IPC por named pipe, extracción de frames
+    installer.rs     descarga/extracción de mpv portable
+    mod.rs           motor multi-monitor
+  platform/
+    host.rs          ventanas WorkerW, reparentado, diagnóstico
+    ipc.rs           servidor/cliente named pipe
+    static_wallpaper.rs  IDesktopWallpaper
+    win.rs           monitores, DPI, energía, fullscreen/oclusión, registro
+  scanner/           escaneo de biblioteca y miniaturas
+  online/
+    mod.rs           Wallhaven, Bing, Pexels
+    motionbgs.rs     scraping del catálogo MotionBGS
+  theme.rs           paleta, fuentes Segoe UI/MDL2, estilos egui
+  ui/                biblioteca, explorar, pantallas, ajustes, about, HUD
+```
+
+Tests unitarios cubren configuración, escalado, paleta, hash, rutas, extensiones y el parser de MotionBGS.
+
+---
+
+## Firma de código
+
+El ejecutable incluido está firmado con un certificado **autofirmado** (`CN=Aura Engine (Self-Signed)`), SHA-256 y sello de tiempo de DigiCert.
+
+```powershell
+Get-AuthenticodeSignature .\aura.exe
+# Status: Valid (si el certificado está en el almacén de confianza del usuario)
+```
+
+### Confiar en el certificado (solo para pruebas)
+
+```powershell
+.\install.ps1 -TrustCertificate
+```
+
+O manualmente:
+
+```powershell
+certutil -addstore -f -user Root .\certs\aura-selfsigned.cer
+certutil -addstore -f -user TrustedPublisher .\certs\aura-selfsigned.cer
+```
+
+> **Importante:** una firma autofirmada **no elimina SmartScreen** en otros equipos. Solo es válida donde se importe el `.cer`. Para distribución pública necesitas un certificado emitido por una CA.
+
+### Firma real para distribución
+
+Desde 2023 las CA exigen que la clave privada resida en un token/HSM o servicio cloud:
+
+| Opción | Coste | Notas |
+| --- | --- | --- |
+| **Azure Trusted Signing** | ~9,99 USD/mes | Validación de identidad; integración con GitHub Actions |
+| **SignPath.io** | Gratis para OSS | Firma en CI para proyectos open source |
+| **Certum / Sectigo / DigiCert** | 200–600 USD/año | OV/EV, token físico o HSM cloud |
+
+```powershell
+.\scripts\sign.ps1 -Path .\target\release\aura.exe -Thumbprint <THUMBPRINT>
+
+# o con PFX (CI):
+.\scripts\sign.ps1 -Path .\target\release\aura.exe -Pfx .\cert.pfx -PfxPassword $env:PFX_PASSWORD
+```
+
+### Quitar el certificado autofirmado
+
+```powershell
+Get-ChildItem Cert:\CurrentUser\My,Cert:\CurrentUser\Root,Cert:\CurrentUser\TrustedPublisher |
+    Where-Object { $_.Subject -like "*Aura Engine (Self-Signed)*" } |
+    Remove-Item
+```
+
+---
+
+## Diferencias con Aura (Linux)
+
+| Aura (Linux) | Aura Engine (Windows) |
+| --- | --- |
+| `libcosmic` (Wayland) | `egui`/`eframe` |
+| `mpvpaper` + `wlr-layer-shell` | `WorkerW` + `mpv --wid` |
+| Sockets Unix | Named pipes |
+| `cosmic-randr` / `wlr-randr` | `EnumDisplayMonitors` |
+| D-Bus GameMode / UPower | `SHQueryUserNotificationState` / `GetSystemPowerStatus` |
+| `ksni` (StatusNotifier) | `tray-icon` |
+| GSettings / COSMIC theme | `IDesktopWallpaper` + acento de Windows (opt-in) |
+| Actualizador `.tar.gz` | ZIP + instalador PowerShell |
+
+---
+
+## Licencia
+
+GPL-3.0-or-later. Ver [LICENSE](LICENSE), [NOTICE](NOTICE) y [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+Aura original: [antwny/aura](https://github.com/antwny/aura) (GPL-3.0-or-later).
+Historial de cambios: [CHANGELOG.md](CHANGELOG.md).
+
+mpv se distribuye bajo GPL/LGPL; si empaquetas `mpv.exe` con Aura, incluye su licencia y fuentes correspondientes.
