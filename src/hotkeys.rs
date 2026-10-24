@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotkeyAction {
@@ -57,6 +57,12 @@ pub fn create() -> Option<Hotkeys> {
 pub fn poll(hotkeys: &Hotkeys) -> Vec<HotkeyAction> {
     let mut actions = Vec::new();
     while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+        // global-hotkey emits both Pressed and Released. Acting on Released
+        // made every shortcut fire twice and made the quick switcher close
+        // as soon as the keys were released.
+        if event.state != HotKeyState::Pressed {
+            continue;
+        }
         if let Some(action) = hotkeys.map.get(&event.id) {
             actions.push(*action);
         }

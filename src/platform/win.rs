@@ -519,19 +519,6 @@ pub fn park_window(hwnd: HWND, hidden: bool) {
     }
 }
 
-/// True while Ctrl+Alt+W is physically held, used by the hold-to-show HUD.
-pub fn switcher_combo_held() -> bool {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_W,
-    };
-    unsafe {
-        let down = |vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY| {
-            (GetAsyncKeyState(vk.0 as i32) as u16) & 0x8000 != 0
-        };
-        down(VK_CONTROL) && down(VK_MENU) && down(VK_W)
-    }
-}
-
 pub fn open_logs_folder() {
     util::open_path(&util::logs_dir());
 }

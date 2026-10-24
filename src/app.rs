@@ -118,9 +118,9 @@ pub struct AuraApp {
     pub hud_open: bool,
     pub hud_index: usize,
     pub hud_items: Vec<MediaItem>,
-    pub hud_hold: bool,
-    pub hud_opened_at: Instant,
     pub hud_page_anim: f32,
+    /// Smoothly animated position of the Cinematic/Dock carousel.
+    pub hud_carousel: f32,
 
     pub tray: Option<Tray>,
     pub hotkeys: Option<Hotkeys>,
@@ -248,9 +248,8 @@ impl AuraApp {
             hud_open: false,
             hud_index: 0,
             hud_items: Vec::new(),
-            hud_hold: false,
-            hud_opened_at: Instant::now(),
             hud_page_anim: 0.0,
+            hud_carousel: 0.0,
             tray: None,
             hotkeys: hotkeys::create(),
             last_tick: Instant::now(),
@@ -922,26 +921,13 @@ impl AuraApp {
     }
 
     pub fn open_switcher(&mut self) {
-        self.open_switcher_inner(false);
-    }
-
-    /// Hold-to-show variant used by Ctrl+Alt+W: releasing the combo closes it.
-    pub fn open_switcher_hold(&mut self) {
         if self.hud_open {
             self.hud_open = false;
-            self.hud_hold = false;
-            return;
-        }
-        self.open_switcher_inner(true);
-    }
-
-    fn open_switcher_inner(&mut self, hold: bool) {
-        if self.hud_open {
-            self.hud_open = false;
-            self.hud_hold = false;
+            self.hidden_lost_foreground = false;
             return;
         }
         let items = self.filtered_items();
+        log::info!("quick switcher: opening with {} items", items.len());
         if items.is_empty() {
             self.error(self.strings.hud_empty);
             return;
@@ -953,10 +939,12 @@ impl AuraApp {
             .and_then(|last| items.iter().position(|i| &i.path == last))
             .unwrap_or(0);
         self.hud_page_anim = (self.hud_index / HUD_PAGE_SIZE) as f32;
+        self.hud_carousel = self.hud_index as f32;
         self.hud_items = items;
-        self.hud_hold = hold;
-        self.hud_opened_at = Instant::now();
         self.hud_open = true;
+        // Opening the HUD must not make the parked main window pop up when it
+        // closes; a real "Switch to" will lose the foreground again first.
+        self.hidden_lost_foreground = false;
     }
 
     pub fn request_quit(&mut self) {
@@ -984,7 +972,7 @@ impl AuraApp {
         let actions = hotkeys::poll(hotkeys);
         for action in actions {
             match action {
-                HotkeyAction::Switcher => self.open_switcher_hold(),
+                HotkeyAction::Switcher => self.open_switcher(),
                 HotkeyAction::Next => self.next_wallpaper(1),
                 HotkeyAction::Prev => self.next_wallpaper(-1),
                 HotkeyAction::TogglePause => self.toggle_pause(),
@@ -1095,7 +1083,9 @@ impl AuraApp {
         // foreground; bring it back on-screen when that happens. Ignore the
         // window's own startup activation: only a foreground transition that
         // happens after the parked window lost the foreground counts.
-        if self.hidden {
+        // While the quick switcher is open it owns the foreground, so do not
+        // restore the main window behind it.
+        if self.hidden && !self.hud_open {
             let is_fg = self
                 .main_hwnd
                 .map(|hwnd| win::is_foreground(windows::Win32::Foundation::HWND(hwnd as *mut _)))
@@ -1213,15 +1203,6 @@ impl eframe::App for AuraApp {
         if self.accent != self.applied_accent {
             theme::apply(ctx, self.accent);
             self.applied_accent = self.accent;
-        }
-
-        if self.hud_open
-            && self.hud_hold
-            && self.hud_opened_at.elapsed() > Duration::from_millis(250)
-            && !win::switcher_combo_held()
-        {
-            self.hud_open = false;
-            self.hud_hold = false;
         }
 
         if self.hud_open {

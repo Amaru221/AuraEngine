@@ -2,6 +2,28 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [1.0.10] - 2026-10-24
+
+### Fixed
+
+- The quick switcher no longer closes (and flickers) when `Ctrl+Alt+W` is
+  released. `global-hotkey` emits both Pressed and Released events and the app
+  was acting on both; only Pressed is handled now, so all shortcuts fire once.
+- `Ctrl+Alt+W` now toggles the HUD: press to open, press again to close.
+- Opening the quick switcher no longer brings the parked main window back, and
+  closing it no longer pops the main window on screen.
+- Moving the mouse over the Cinematic/Dock carousel no longer changes the
+  selection; only the keyboard and wheel navigate.
+
+### Changed
+
+- Cinematic and Dock are now smoothly animated, frame-rate independent
+  carousels: arrows/WASD move one card and `PageUp`/`PageDown` move a page.
+- Cinematic cards have more spacing and no overlapping labels; the Dock has
+  wider gaps.
+- The page counter and redundant labels are hidden in carousel modes.
+- Updated the HUD hint text for the new toggle and paging behaviour.
+
 ## [1.0.9] - 2026-10-24
 
 ### Added

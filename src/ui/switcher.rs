@@ -25,12 +25,15 @@ impl AuraApp {
         // and hashing every item on each frame.
         let items = std::mem::take(&mut self.hud_items);
         if items.is_empty() {
+            log::warn!("quick switcher: items snapshot is empty, closing");
             self.hud_open = false;
+            self.hidden_lost_foreground = false;
             return;
         }
         let len = items.len();
         let mut index = self.hud_index.min(len - 1);
         let mut page_anim = self.hud_page_anim;
+        let mut carousel = self.hud_carousel;
 
         let style = self.cfg.hud_style;
 
@@ -175,7 +178,7 @@ impl AuraApp {
                             let vertical = if style == HudStyle::Grid {
                                 HUD_COLS as isize
                             } else {
-                                4
+                                1
                             };
                             if input.key_pressed(Key::ArrowDown) || input.key_pressed(Key::S) {
                                 delta += vertical;
@@ -200,11 +203,19 @@ impl AuraApp {
 
                         let pages = len.div_ceil(HUD_PAGE_SIZE).max(1);
                         if page_delta != 0 {
-                            let current_page = index / HUD_PAGE_SIZE;
-                            let new_page = (current_page as isize + page_delta)
-                                .clamp(0, pages as isize - 1)
-                                as usize;
-                            index = (new_page * HUD_PAGE_SIZE).min(len - 1);
+                            if style == HudStyle::Grid {
+                                let current_page = index / HUD_PAGE_SIZE;
+                                let new_page = (current_page as isize + page_delta)
+                                    .clamp(0, pages as isize - 1)
+                                    as usize;
+                                index = (new_page * HUD_PAGE_SIZE).min(len - 1);
+                            } else {
+                                // Cinematic/Dock use a circular carousel: page by
+                                // the number of cards visible at once.
+                                index = (index as isize + page_delta * HUD_COLS as isize)
+                                    .rem_euclid(len as isize)
+                                    as usize;
+                            }
                         }
                         if scroll.abs() > 1.0 {
                             if style == HudStyle::Grid {
@@ -259,13 +270,15 @@ impl AuraApp {
                             FontId::proportional(10.5),
                             theme::MUTED,
                         );
-                        painter.text(
-                            egui::pos2(screen.center().x, screen.top() + 124.0),
-                            Align2::CENTER_CENTER,
-                            format!("{} / {}", index / HUD_PAGE_SIZE + 1, pages),
-                            FontId::proportional(9.5),
-                            accent.gamma_multiply(0.75),
-                        );
+                        if style == HudStyle::Grid {
+                            painter.text(
+                                egui::pos2(screen.center().x, screen.top() + 124.0),
+                                Align2::CENTER_CENTER,
+                                format!("{} / {}", index / HUD_PAGE_SIZE + 1, pages),
+                                FontId::proportional(9.5),
+                                accent.gamma_multiply(0.75),
+                            );
+                        }
 
                         match style {
                             HudStyle::Grid => {
@@ -281,16 +294,14 @@ impl AuraApp {
                                 );
                             }
                             HudStyle::Cinematic => {
-                                let mut hovered = None;
                                 draw_cinematic(
-                                    ui, &items, &thumbs, &mut index, &mut clicked, &mut hovered,
+                                    ui, &items, &thumbs, &mut index, &mut carousel, &mut clicked,
                                     accent, screen,
                                 );
                             }
                             HudStyle::Dock => {
-                                let mut hovered = None;
                                 draw_dock(
-                                    ui, &items, &thumbs, &mut index, &mut clicked, &mut hovered,
+                                    ui, &items, &thumbs, &mut index, &mut carousel, &mut clicked,
                                     accent, screen,
                                 );
                             }
@@ -331,15 +342,16 @@ impl AuraApp {
         self.hud_items = items;
         self.hud_index = index;
         self.hud_page_anim = page_anim;
+        self.hud_carousel = carousel;
 
         if let Some(path) = apply_path {
             self.apply_media(&path, None);
             self.hud_open = false;
-            self.hud_hold = false;
+            self.hidden_lost_foreground = false;
         }
         if close {
             self.hud_open = false;
-            self.hud_hold = false;
+            self.hidden_lost_foreground = false;
         }
         if toggle_pause {
             self.toggle_pause();
@@ -699,56 +711,97 @@ fn point_in_hex(point: Pos2, center: Pos2, radius: f32) -> bool {
     q.abs().max(r.abs()).max((q + r).abs()) <= 1.0
 }
 
+/// Frame-rate independent exponential smoothing.
+fn smooth_towards(current: &mut f32, target: f32, dt: f32, speed: f32) {
+    let factor = 1.0 - (-speed * dt).exp();
+    *current += (target - *current) * factor;
+    if (target - *current).abs() < 0.001 {
+        *current = target;
+    }
+}
+
+/// Shortest signed distance from `center` to `value` on a circular list.
+fn wrap_offset(value: f32, center: f32, len: f32) -> f32 {
+    if len <= 0.0 {
+        return 0.0;
+    }
+    (value - center + len * 0.5).rem_euclid(len) - len * 0.5
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_cinematic(
     ui: &mut egui::Ui,
     items: &[MediaItem],
     thumbs: &ThumbMap,
     index: &mut usize,
+    anim: &mut f32,
     clicked: &mut Option<usize>,
-    hovered: &mut Option<usize>,
     accent: Color32,
     screen: Rect,
 ) {
-    let len = items.len() as isize;
+    let len = items.len();
+    if len == 0 {
+        return;
+    }
+    let len_f = len as f32;
+    let dt = ui.input(|input| input.stable_dt).clamp(0.001, 0.1);
+    smooth_towards(anim, *index as f32, dt, 16.0);
+    *anim = (*anim).rem_euclid(len_f);
+
     let painter = ui.painter().clone();
     let center = egui::pos2(screen.center().x, screen.center().y + 26.0);
 
-    for offset in [-2isize, -1, 0, 1, 2] {
-        let item_index = (*index as isize + offset).rem_euclid(len.max(1)) as usize;
+    // Farthest cards first so the focused one is painted on top.
+    let mut visible: Vec<(usize, f32)> = (0..len)
+        .map(|i| (i, wrap_offset(i as f32, *anim, len_f)))
+        .filter(|(_, rel)| rel.abs() <= 2.6)
+        .collect();
+    visible.sort_by(|a, b| {
+        b.1.abs()
+            .partial_cmp(&a.1.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for (item_index, rel) in visible {
         let item = &items[item_index];
         let key = AuraApp::thumb_key_for(item);
-        let selected = offset == 0;
+        let selected = item_index == *index;
+        let distance = rel.abs();
 
-        let (w, h, y_off) = if selected {
-            (318.0, 179.0, 0.0)
-        } else if offset.abs() == 1 {
-            (232.0, 131.0, 12.0)
+        // Continuous coverflow: size and lift interpolate while the carousel
+        // slides, which keeps the transition smooth at any frame rate.
+        let width = if distance <= 1.0 {
+            310.0 + (220.0 - 310.0) * distance
         } else {
-            (186.0, 105.0, 22.0)
+            220.0 + (175.0 - 220.0) * (distance - 1.0).min(1.0)
         };
-
-        let x = center.x + offset as f32 * 198.0;
-        let rect = Rect::from_center_size(egui::pos2(x, center.y + y_off), Vec2::new(w, h));
-        let skew = if selected { 0.0 } else { 12.0 * offset.signum() as f32 };
+        let height = width * 9.0 / 16.0;
+        let lift = 10.0 * distance.min(1.0) + 8.0 * (distance - 1.0).clamp(0.0, 1.0);
+        let x = center.x + rel * 250.0;
+        let rect =
+            Rect::from_center_size(egui::pos2(x, center.y + lift), Vec2::new(width, height));
+        let skew = 10.0 * rel.signum() * distance.min(1.0);
+        let fade = (1.0 - (distance / 2.6) * 0.55).clamp(0.35, 1.0);
 
         if selected {
+            let glow = 0.02 + (1.0 - distance.min(1.0)) * 0.07;
             for step in (1..=3).rev() {
                 painter.rect_filled(
                     rect.expand(step as f32 * 7.0),
                     18,
-                    accent.gamma_multiply(0.05),
+                    accent.gamma_multiply(glow),
                 );
             }
         }
 
-        paint_skewed(ui, rect, thumbs.get(&key), skew, selected, accent);
-        painter.text(
-            rect.center_bottom() + Vec2::new(0.0, 8.0),
-            Align2::CENTER_TOP,
-            crate::ui::library::truncate(&item.name, 26),
-            FontId::proportional(if selected { 12.5 } else { 10.5 }),
-            if selected { theme::TEXT } else { theme::MUTED },
+        paint_skewed(
+            ui,
+            rect,
+            thumbs.get(&key),
+            skew,
+            selected,
+            accent,
+            (255.0 * fade) as u8,
         );
 
         let response = ui.interact(
@@ -756,15 +809,10 @@ fn draw_cinematic(
             egui::Id::new(("hud-cine", item_index)),
             Sense::click(),
         );
-        if response.hovered() {
-            *hovered = Some(item_index);
-            *index = item_index;
-        }
         if response.clicked() {
             *clicked = Some(item_index);
         }
     }
-    let _ = hovered;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -773,35 +821,34 @@ fn draw_dock(
     items: &[MediaItem],
     thumbs: &ThumbMap,
     index: &mut usize,
+    anim: &mut f32,
     clicked: &mut Option<usize>,
-    hovered: &mut Option<usize>,
     accent: Color32,
     screen: Rect,
 ) {
-    let len = items.len() as isize;
-    let painter = ui.painter().clone();
-    let base_y = screen.bottom() - 128.0;
-    let offsets: Vec<isize> = (-4..=4).collect();
-
-    let mut widths = Vec::new();
-    let mut total = 0.0f32;
-    for offset in &offsets {
-        let w = match offset.abs() {
-            0 => 186.0,
-            1 => 146.0,
-            2 => 122.0,
-            _ => 102.0,
-        };
-        widths.push(w);
-        total += w + 10.0;
+    let len = items.len();
+    if len == 0 {
+        return;
     }
-    total -= 10.0;
+    let len_f = len as f32;
+    let dt = ui.input(|input| input.stable_dt).clamp(0.001, 0.1);
+    smooth_towards(anim, *index as f32, dt, 15.0);
+    *anim = (*anim).rem_euclid(len_f);
 
+    let painter = ui.painter().clone();
+    let base_y: f32 = screen.bottom() - 185.0;
+    let spacing: f32 = 170.0;
+
+    let dock_width = (spacing * 8.0 + 186.0).min(screen.width() - 120.0);
     let dock_rect = Rect::from_center_size(
-        egui::pos2(screen.center().x, base_y + 10.0),
-        Vec2::new(total + 44.0, 196.0),
+        egui::pos2(screen.center().x, base_y + 12.0),
+        Vec2::new(dock_width, 210.0),
     );
-    painter.rect_filled(dock_rect, 22, Color32::from_rgba_unmultiplied(18, 21, 29, 240));
+    painter.rect_filled(
+        dock_rect,
+        22,
+        Color32::from_rgba_unmultiplied(18, 21, 29, 240),
+    );
     painter.rect_stroke(
         dock_rect,
         22,
@@ -809,22 +856,39 @@ fn draw_dock(
         StrokeKind::Inside,
     );
 
-    let mut x = screen.center().x - total / 2.0;
-    for (n, offset) in offsets.iter().enumerate() {
-        let item_index = (*index as isize + offset).rem_euclid(len.max(1)) as usize;
+    let mut visible: Vec<(usize, f32)> = (0..len)
+        .map(|i| (i, wrap_offset(i as f32, *anim, len_f)))
+        .filter(|(_, rel)| rel.abs() <= 4.3)
+        .collect();
+    visible.sort_by(|a, b| {
+        b.1.abs()
+            .partial_cmp(&a.1.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for (item_index, rel) in visible {
         let item = &items[item_index];
         let key = AuraApp::thumb_key_for(item);
-        let selected = *offset == 0;
+        let selected = item_index == *index;
+        let distance = rel.abs();
 
-        let w = widths[n];
-        let h = if selected {
-            132.0
+        let width = if distance <= 1.0 {
+            184.0 + (146.0 - 184.0) * distance
+        } else if distance <= 2.0 {
+            146.0 + (122.0 - 146.0) * (distance - 1.0)
+        } else if distance <= 3.0 {
+            122.0 + (102.0 - 122.0) * (distance - 2.0)
         } else {
-            92.0 * (1.0 - (offset.abs() as f32 - 1.0).max(0.0) * 0.08)
+            102.0
         };
-        let y = base_y - if selected { 18.0 } else { 0.0 };
-        let rect = Rect::from_center_size(egui::pos2(x + w / 2.0, y + h / 2.0), Vec2::new(w, h));
-        x += w + 10.0;
+        let height = width * 0.71;
+        let lift = 18.0 * (1.0 - distance.min(1.0));
+        let x = screen.center().x + rel * spacing;
+        let rect = Rect::from_center_size(
+            egui::pos2(x, base_y + height / 2.0 - lift),
+            Vec2::new(width, height),
+        );
+        let fade = (1.0 - (distance / 4.3) * 0.5).clamp(0.4, 1.0);
 
         if selected {
             painter.rect_filled(rect.expand(4.0), 14, accent.gamma_multiply(0.15));
@@ -835,7 +899,7 @@ fn draw_dock(
             thumbs.get(&key),
             selected,
             accent,
-            if selected { 255 } else { 210 },
+            (255.0 * fade) as u8,
         );
 
         let response = ui.interact(
@@ -843,10 +907,6 @@ fn draw_dock(
             egui::Id::new(("hud-dock", item_index)),
             Sense::click(),
         );
-        if response.hovered() {
-            *hovered = Some(item_index);
-            *index = item_index;
-        }
         if response.clicked() {
             *clicked = Some(item_index);
         }
@@ -898,8 +958,10 @@ fn paint_skewed(
     skew: f32,
     selected: bool,
     accent: Color32,
+    alpha: u8,
 ) {
     let painter = ui.painter();
+    let fade = alpha as f32 / 255.0;
     if let Some((texture, _)) = thumb {
         let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
         let corners = [
@@ -921,13 +983,13 @@ fn paint_skewed(
             .map(|(pos, uv)| Vertex {
                 pos: *pos,
                 uv: *uv,
-                color: Color32::WHITE,
+                color: Color32::from_rgba_unmultiplied(255, 255, 255, alpha),
             })
             .collect();
         mesh.indices = vec![0, 1, 2, 0, 2, 3];
         painter.add(Shape::mesh(mesh));
     } else {
-        painter.rect_filled(rect, 12, theme::CARD);
+        painter.rect_filled(rect, 12, theme::CARD.gamma_multiply(fade));
     }
 
     let outline = [
@@ -941,10 +1003,32 @@ fn paint_skewed(
         Stroke::new(
             if selected { 2.0 } else { 1.0_f32 },
             if selected {
-                accent
+                accent.gamma_multiply(fade)
             } else {
-                theme::BORDER
+                theme::BORDER.gamma_multiply(fade.max(0.35))
             },
         ),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{smooth_towards, wrap_offset};
+
+    #[test]
+    fn wrap_offset_uses_the_shortest_path() {
+        assert!((wrap_offset(0.0, 9.0, 10.0) - 1.0).abs() < 1e-5);
+        assert!((wrap_offset(9.0, 0.0, 10.0) + 1.0).abs() < 1e-5);
+        assert_eq!(wrap_offset(5.0, 5.0, 10.0), 0.0);
+    }
+
+    #[test]
+    fn smooth_towards_converges_without_overshooting() {
+        let mut value = 0.0;
+        for _ in 0..120 {
+            smooth_towards(&mut value, 5.0, 1.0 / 60.0, 16.0);
+            assert!(value <= 5.0);
+        }
+        assert!((value - 5.0).abs() < 0.01);
+    }
 }
