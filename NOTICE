@@ -20,7 +20,10 @@ Aura Engine is a Windows port of Aura:
 
   Aura - https://github.com/antwny/aura
   Copyright (C) antwny and contributors
-  Licensed under GPL-3.0-or-later.
+  Licensed under GPL-3.0-or-later (as declared in its Cargo.toml).
+
+Aura Engine is an **unofficial port** and is not affiliated with or endorsed
+by the original Aura project.
 
 The original Aura source was used as the reference for this port. The
 Windows implementation, WorkerW hosting, mpv integration, egui interface
@@ -28,4 +31,11 @@ and CLI are new code, while some modules (notably the MotionBGS catalog
 parser and the palette extraction algorithm) are adapted from the
 original GPL-3.0-or-later code.
 
-See THIRD_PARTY_LICENSES.md for the other components.
+mpv is NOT bundled with Aura Engine. Aura may download an mpv build at
+runtime from https://github.com/shinchiro/mpv-winbuild-cmake. mpv is
+licensed under GPL-2.0-or-later (some parts LGPL-2.1-or-later); its source
+is at https://github.com/mpv-player/mpv. When mpv is downloaded, its own
+license and source terms apply.
+
+See THIRD_PARTY_LICENSES.md for a summary and THIRD_PARTY_LICENSES.txt for
+the full texts.

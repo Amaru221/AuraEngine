@@ -45,6 +45,9 @@ try {
     $versionLine = Get-Content "Cargo.toml" | Where-Object { $_ -match '^version\s*=' } | Select-Object -First 1
     $version = ($versionLine -replace 'version\s*=\s*"', '' -replace '"', '').Trim()
 
+    . (Join-Path $PSScriptRoot "source-info.ps1")
+    Write-SourceFile -Root $root -Version $version
+
     # mpv is optional: without it the app downloads a portable build on first use.
     $stagedMpv = Join-Path $root "installer\mpv.exe"
     if ($NoMpv) {

@@ -43,11 +43,11 @@ Cada release publica tres artefactos:
 
 - `aura-vX-windows-x64-setup.exe` — **instalador recomendado**: menú Inicio, acceso directo opcional, inicio con Windows opcional, entrada en Aplicaciones instaladas y desinstalador.
 - `aura-vX-windows-x64.exe` — ejecutable portable.
-- `aura-vX-windows-x64.zip` — paquete portable con mpv, `install.ps1`/`uninstall.ps1`, documentación y certificado público.
+- `aura-vX-windows-x64.zip` — paquete portable con `install.ps1`/`uninstall.ps1`, documentación y certificado público.
 
 https://github.com/Amaru221/AuraEngine/releases
 
-Los paquetes incluyen mpv, así que funcionan sin conexión. El `.exe` portable también descarga mpv automáticamente en el primer uso si no lo encuentra.
+Los paquetes oficiales **no incluyen mpv**: Aura lo descarga en el primer uso desde el build oficial de mpv. Así la distribución oficial contiene únicamente el código GPL de Aura (más documentación y certificado). El `.exe` portable funciona igual.
 
 ---
 
@@ -68,13 +68,13 @@ El instalador crea el grupo **Aura Engine** en el menú Inicio (busca "Aura Engi
 Instalación silenciosa:
 
 ```powershell
-.\aura-v1.0.14-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+.\aura-v1.0.15-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ```
 
 ### Opción B — Portable
 
 ```powershell
-cd .\dist\aura-v1.0.14-windows-x64
+cd .\dist\aura-v1.0.15-windows-x64
 .\aura.exe
 ```
 
@@ -110,7 +110,7 @@ cargo build --release
 .\scripts\build-installer.ps1 -Sign  # instalador Inno Setup
 ```
 
-Genera `dist\aura-v1.0.14-windows-x64.zip` y `dist\aura-v1.0.14-windows-x64-setup.exe`.
+Genera `dist\aura-v1.0.15-windows-x64.zip` y `dist\aura-v1.0.15-windows-x64-setup.exe`.
 El instalador necesita [Inno Setup 6](https://jrsoftware.org/isinfo.php)
 (`winget install --id JRSoftware.InnoSetup -e`).
 
@@ -366,9 +366,10 @@ Get-ChildItem Cert:\CurrentUser\My,Cert:\CurrentUser\Root,Cert:\CurrentUser\Trus
 
 ## Licencia
 
-GPL-3.0-or-later. Ver [LICENSE](LICENSE), [NOTICE](NOTICE) y [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+**GPL-3.0-or-later**. Ver [LICENSE](LICENSE), [NOTICE](NOTICE), [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt) (textos completos) y [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
-Aura original: [antwny/aura](https://github.com/antwny/aura) (GPL-3.0-or-later).
-Historial de cambios: [CHANGELOG.md](CHANGELOG.md).
+Código fuente de la release: `https://github.com/Amaru221/AuraEngine/tree/vX` (sustituye `vX` por la etiqueta de la versión).
 
-mpv se distribuye bajo GPL/LGPL; si empaquetas `mpv.exe` con Aura, incluye su licencia y fuentes correspondientes.
+Aura original: [antwny/aura](https://github.com/antwny/aura) (GPL-3.0-or-later). Aura Engine es un **port no oficial**, sin afiliación ni respaldo del proyecto original. Se distribuye **sin garantía**.
+
+mpv **no se incluye** en los assets oficiales. Si Aura lo descarga en el primer uso, mpv sigue bajo su propia licencia (GPL-2.0-or-later, algunas partes LGPL-2.1-or-later); su código fuente está en [mpv-player/mpv](https://github.com/mpv-player/mpv) y los builds en [shinchiro/mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake).

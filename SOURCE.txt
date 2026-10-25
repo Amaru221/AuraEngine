@@ -1,0 +1,25 @@
+Aura Engine v1.0.15
+Copyright (C) 2026 Amaru221 and contributors
+
+License: GNU General Public License, version 3 or later (GPL-3.0-or-later).
+See LICENSE for the full license text and NOTICE for attribution.
+
+Corresponding source code for this release:
+https://github.com/Amaru221/AuraEngine/tree/v1.0.15
+
+Third-party license texts:
+THIRD_PARTY_LICENSES.txt
+
+Aura Engine is an unofficial Windows port of Aura
+(https://github.com/antwny/aura) and is not affiliated with or endorsed by
+the original project.
+
+mpv is NOT bundled with Aura Engine. Aura may download an mpv build at
+runtime from https://github.com/shinchiro/mpv-winbuild-cmake. mpv is
+licensed under GPL-2.0-or-later (some parts LGPL-2.1-or-later); its source
+is available at https://github.com/mpv-player/mpv. When mpv is downloaded,
+its own license and source terms apply.
+
+This software is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.

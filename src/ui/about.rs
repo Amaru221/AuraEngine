@@ -224,6 +224,23 @@ ui.add_space(16.0);
                         if ui.button(self.strings.report_issue).clicked() {
                             crate::util::open_url("https://github.com/Amaru221/AuraEngine/issues");
                         }
+                        if ui.button(self.strings.third_party_licenses).clicked() {
+                            let path = std::env::current_exe()
+                                .ok()
+                                .and_then(|exe| {
+                                    exe.parent()
+                                        .map(|dir| dir.join("THIRD_PARTY_LICENSES.txt"))
+                                })
+                                .filter(|path| path.exists());
+                            if let Some(path) = path {
+                                crate::util::open_path(&path);
+                            } else {
+                                crate::util::open_url(&format!(
+                                    "https://github.com/Amaru221/AuraEngine/blob/v{}/THIRD_PARTY_LICENSES.txt",
+                                    env!("CARGO_PKG_VERSION")
+                                ));
+                            }
+                        }
                         if ui.button(self.strings.open_logs).clicked() {
                             crate::platform::win::open_logs_folder();
                         }

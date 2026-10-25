@@ -35,7 +35,11 @@ try {
     New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
     Copy-Item "target\release\aura.exe" $dist
-    Copy-Item "README.md", "LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.md", "CHANGELOG.md", "install.ps1", "uninstall.ps1" $dist
+
+    . (Join-Path $PSScriptRoot "source-info.ps1")
+    Write-SourceFile -Root $root -Version $version
+
+    Copy-Item "README.md", "LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.md", "THIRD_PARTY_LICENSES.txt", "SOURCE.txt", "CHANGELOG.md", "install.ps1", "uninstall.ps1" $dist
 
     $publicCert = Join-Path $root "certs\aura-selfsigned.cer"
     if (-not (Test-Path $publicCert)) {

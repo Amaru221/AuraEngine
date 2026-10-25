@@ -2,14 +2,14 @@
 ; Build with: .\scripts\build-installer.ps1
 ;
 ; The version can be overridden from the command line:
-;   ISCC.exe /DMyAppVersion=1.0.14 installer\aura.iss
+;   ISCC.exe /DMyAppVersion=1.0.15 installer\aura.iss
 
 #ifndef MyAppName
   #define MyAppName "Aura Engine"
 #endif
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.14"
+  #define MyAppVersion "1.0.15"
 #endif
 
 #define MyAppPublisher "Amaru221"
@@ -89,6 +89,8 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\NOTICE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\THIRD_PARTY_LICENSES.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\SOURCE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\certs\aura-selfsigned.cer"; DestDir: "{app}\certs"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "mpv.exe"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist

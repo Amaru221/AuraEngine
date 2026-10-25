@@ -2,6 +2,24 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [1.0.15] - 2026-10-25
+
+### Changed
+
+- The official installer and ZIP no longer bundle mpv; Aura downloads it on
+  first use. The distributed binaries now contain only Aura's own GPL code
+  (plus documentation and the public certificate), removing the
+  mpv/FFmpeg redistribution obligation.
+- Add `THIRD_PARTY_LICENSES.txt` with the full license texts of the Rust
+  crates, the embedded egui fonts and the component-specific licenses.
+- Add `SOURCE.txt` with the exact source-code tag and license information.
+  Release assets now include `LICENSE`, `NOTICE`,
+  `THIRD_PARTY_LICENSES.txt` and `SOURCE.txt`.
+- Add an unofficial-port disclaimer, the mpv download notice and an About
+  button that opens the third-party licenses.
+- Update the release workflow to build the installer and ZIP without mpv and
+  to link the exact source tag.
+
 ## [1.0.14] - 2026-10-25
 
 ### Added
