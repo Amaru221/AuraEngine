@@ -1215,7 +1215,20 @@ impl AuraApp {
     }
 
     pub fn request_quit(&mut self) {
+        if self.quitting {
+            return;
+        }
         self.quitting = true;
+        log::info!("quit requested; watchdog will force exit in 3s if shutdown hangs");
+        // The engine shutdown / wallpaper restore can block on a stuck mpv
+        // process. Guarantee a real process exit, especially from the tray.
+        let _ = std::thread::Builder::new()
+            .name("aura-quit-watchdog".into())
+            .spawn(|| {
+                std::thread::sleep(Duration::from_secs(3));
+                log::warn!("graceful quit timed out; forcing process exit");
+                std::process::exit(0);
+            });
     }
 
     fn poll_tray(&mut self) {
@@ -1339,7 +1352,7 @@ impl AuraApp {
                 self.hidden = true;
                 self.hidden_lost_foreground = false;
             } else {
-                self.quitting = true;
+                self.request_quit();
             }
         }
     }
@@ -1498,6 +1511,14 @@ impl eframe::App for AuraApp {
 
         super::ui::main_ui(self, ctx);
         self.apply_window_state(_frame);
+
+        if let Some(hwnd) = self.main_hwnd {
+            let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+            win::apply_rounded_corners(
+                windows::Win32::Foundation::HWND(hwnd as *mut _),
+                maximized,
+            );
+        }
 
         if self.dirty && self.last_edit.elapsed() > Duration::from_millis(800) {
             self.save_now();

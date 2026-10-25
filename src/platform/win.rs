@@ -523,6 +523,44 @@ pub fn open_logs_folder() {
     util::open_path(&util::logs_dir());
 }
 
+/// Clips the borderless main window to rounded corners. The region is in
+/// window coordinates, so it is refreshed when the window is resized or
+/// maximized. Maximized windows stay square.
+pub fn apply_rounded_corners(hwnd: HWND, maximized: bool) {
+    let mut rect = RECT::default();
+    unsafe {
+        let _ = GetWindowRect(hwnd, &mut rect);
+    }
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    if width <= 0 || height <= 0 {
+        return;
+    }
+
+    static LAST_SHAPE: std::sync::Mutex<Option<(isize, i32, i32, bool)>> =
+        std::sync::Mutex::new(None);
+    let key = (hwnd.0 as isize, width, height, maximized);
+    let mut last = LAST_SHAPE
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    if *last == Some(key) {
+        return;
+    }
+    *last = Some(key);
+
+    use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, SetWindowRgn};
+    unsafe {
+        if maximized {
+            let _ = SetWindowRgn(hwnd, None, true);
+        } else {
+            let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, 20, 20);
+            if !region.is_invalid() {
+                let _ = SetWindowRgn(hwnd, Some(region), true);
+            }
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub fn reveal_path(path: &Path) {
     util::reveal_in_explorer(path);

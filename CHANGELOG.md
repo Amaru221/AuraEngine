@@ -2,6 +2,18 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [1.0.16] - 2026-10-25
+
+### Fixed
+
+- Removed the full-window resize overlay introduced in 1.0.14 that could
+  block clicks and leave the UI unmanageable. Resizing is now done from a
+  small bottom-right grip, and the rest of the window is interactive again.
+- The main window now has rounded corners (10 px) through a window region;
+  maximized windows stay square.
+- Tray **Quit** now guarantees a complete process exit: a watchdog forces
+  `exit(0)` after 3 seconds if the graceful engine shutdown hangs.
+
 ## [1.0.15] - 2026-10-25
 
 ### Changed

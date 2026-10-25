@@ -50,7 +50,7 @@ pub fn main_ui(app: &mut AuraApp, ctx: &egui::Context) {
     toast(app, ctx);
     drop_overlay(ctx);
     window_border(ctx);
-    resize_handles(ctx);
+    resize_grip(ctx);
 }
 
 fn title_bar(app: &mut AuraApp, ctx: &egui::Context) {
@@ -170,6 +170,8 @@ fn window_button(
 }
 
 fn window_border(ctx: &egui::Context) {
+    let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+    let radius = if maximized { 0 } else { 10 };
     let screen = ctx.screen_rect();
     ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -177,86 +179,37 @@ fn window_border(ctx: &egui::Context) {
     ))
     .rect_stroke(
         screen.shrink(0.5),
-        egui::CornerRadius::ZERO,
+        egui::CornerRadius::same(radius),
         Stroke::new(1.0_f32, theme::border()),
         egui::StrokeKind::Inside,
     );
 }
 
-fn resize_handles(ctx: &egui::Context) {
+fn resize_grip(ctx: &egui::Context) {
     let screen = ctx.screen_rect();
-    let edge = 5.0;
-    let corner = edge * 2.0;
-    let handles = [
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(screen.left(), screen.top()),
-                egui::pos2(screen.right(), screen.top() + edge),
-            ),
-            egui::ResizeDirection::North,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(screen.left(), screen.bottom() - edge),
-                egui::pos2(screen.right(), screen.bottom()),
-            ),
-            egui::ResizeDirection::South,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(screen.left(), screen.top()),
-                egui::pos2(screen.left() + edge, screen.bottom()),
-            ),
-            egui::ResizeDirection::West,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(screen.right() - edge, screen.top()),
-                egui::pos2(screen.right(), screen.bottom()),
-            ),
-            egui::ResizeDirection::East,
-        ),
-        (
-            egui::Rect::from_min_max(screen.min, screen.min + egui::vec2(corner, corner)),
-            egui::ResizeDirection::NorthWest,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(screen.right() - corner, screen.top()),
-                egui::pos2(screen.right(), screen.top() + corner),
-            ),
-            egui::ResizeDirection::NorthEast,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(screen.left(), screen.bottom() - corner),
-                egui::pos2(screen.left() + corner, screen.bottom()),
-            ),
-            egui::ResizeDirection::SouthWest,
-        ),
-        (
-            egui::Rect::from_min_max(
-                egui::pos2(screen.right() - corner, screen.bottom() - corner),
-                egui::pos2(screen.right(), screen.bottom()),
-            ),
-            egui::ResizeDirection::SouthEast,
-        ),
-    ];
-
-    egui::Area::new(egui::Id::new("aura-resize-handles"))
+    egui::Area::new(egui::Id::new("aura-resize-grip"))
         .order(egui::Order::Foreground)
-        .fixed_pos(screen.min)
+        .fixed_pos(screen.right_bottom() - Vec2::splat(20.0))
         .show(ctx, |ui| {
-            ui.set_min_size(screen.size());
-            for (index, (rect, direction)) in handles.iter().enumerate() {
-                let response = ui.interact(
-                    *rect,
-                    egui::Id::new(("aura-resize", index)),
-                    Sense::drag(),
+            let (rect, response) =
+                ui.allocate_exact_size(Vec2::splat(18.0), Sense::drag());
+            if response.drag_started() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(
+                    egui::ResizeDirection::SouthEast,
+                ));
+            }
+            response.on_hover_cursor(egui::CursorIcon::ResizeNwSe);
+
+            let painter = ui.painter();
+            for index in 0..3 {
+                let offset = 4.0 + index as f32 * 4.0;
+                painter.line_segment(
+                    [
+                        egui::pos2(rect.right() - offset, rect.bottom() - 2.0),
+                        egui::pos2(rect.right() - 2.0, rect.bottom() - offset),
+                    ],
+                    Stroke::new(1.0_f32, theme::muted().gamma_multiply(0.55)),
                 );
-                if response.drag_started() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(*direction));
-                }
             }
         });
 }
