@@ -14,6 +14,8 @@ use crate::app::{AuraApp, Nav, ToastKind};
 use crate::theme;
 
 pub fn main_ui(app: &mut AuraApp, ctx: &egui::Context) {
+    title_bar(app, ctx);
+
     egui::SidePanel::left("aura-sidebar")
         .exact_width(224.0)
         .resizable(false)
@@ -47,6 +49,216 @@ pub fn main_ui(app: &mut AuraApp, ctx: &egui::Context) {
 
     toast(app, ctx);
     drop_overlay(ctx);
+    window_border(ctx);
+    resize_handles(ctx);
+}
+
+fn title_bar(app: &mut AuraApp, ctx: &egui::Context) {
+    let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+
+    egui::TopBottomPanel::top("aura-titlebar")
+        .exact_height(38.0)
+        .frame(egui::Frame::NONE.fill(theme::titlebar()))
+        .show(ctx, |ui| {
+            let rect = ui.max_rect();
+            let drag = ui.interact(
+                rect,
+                egui::Id::new("aura-titlebar-drag"),
+                Sense::click_and_drag(),
+            );
+            if drag.drag_started() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            if drag.double_clicked() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            }
+
+            let painter = ui.painter();
+            let logo = egui::pos2(rect.left() + 20.0, rect.center().y);
+            painter.circle_filled(logo, 9.0, app.accent);
+            painter.text(
+                logo + Vec2::new(1.0, 0.0),
+                Align2::CENTER_CENTER,
+                theme::ICON_PLAY,
+                FontId::new(9.0, egui::FontFamily::Name("icons".into())),
+                theme::contrast_on(app.accent),
+            );
+            painter.text(
+                egui::pos2(rect.left() + 38.0, rect.center().y),
+                Align2::LEFT_CENTER,
+                app.strings.app_name,
+                FontId::proportional(12.5),
+                theme::text(),
+            );
+
+            let width = 46.0;
+            let height = rect.height();
+            let close = egui::Rect::from_min_size(
+                egui::pos2(rect.right() - width, rect.top()),
+                egui::vec2(width, height),
+            );
+            let maximize = close.translate(egui::vec2(-width, 0.0));
+            let minimize = maximize.translate(egui::vec2(-width, 0.0));
+
+            window_button(
+                ui,
+                minimize,
+                "minimize",
+                theme::ICON_MINIMIZE,
+                false,
+                || ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            );
+            window_button(
+                ui,
+                maximize,
+                "maximize",
+                if maximized {
+                    theme::ICON_RESTORE
+                } else {
+                    theme::ICON_MAXIMIZE
+                },
+                false,
+                || ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized)),
+            );
+            window_button(ui, close, "close", theme::ICON_CLOSE, true, || {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close)
+            });
+        });
+}
+
+fn window_button(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    id: &'static str,
+    icon: &str,
+    danger: bool,
+    action: impl FnOnce(),
+) {
+    let response = ui.interact(
+        rect,
+        egui::Id::new(("aura-window-button", id)),
+        Sense::click(),
+    );
+    let hovered = response.hovered();
+    let fill = if hovered {
+        if danger {
+            Color32::from_rgb(196, 43, 28)
+        } else {
+            theme::card_hover()
+        }
+    } else {
+        Color32::TRANSPARENT
+    };
+    if fill != Color32::TRANSPARENT {
+        ui.painter().rect_filled(rect.shrink(4.0), 6, fill);
+    }
+    let color = if hovered && danger {
+        Color32::WHITE
+    } else {
+        theme::text()
+    };
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        icon,
+        FontId::new(11.0, egui::FontFamily::Name("icons".into())),
+        color,
+    );
+    if response.clicked() {
+        action();
+    }
+}
+
+fn window_border(ctx: &egui::Context) {
+    let screen = ctx.screen_rect();
+    ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("aura-window-border"),
+    ))
+    .rect_stroke(
+        screen.shrink(0.5),
+        egui::CornerRadius::ZERO,
+        Stroke::new(1.0_f32, theme::border()),
+        egui::StrokeKind::Inside,
+    );
+}
+
+fn resize_handles(ctx: &egui::Context) {
+    let screen = ctx.screen_rect();
+    let edge = 5.0;
+    let corner = edge * 2.0;
+    let handles = [
+        (
+            egui::Rect::from_min_max(
+                egui::pos2(screen.left(), screen.top()),
+                egui::pos2(screen.right(), screen.top() + edge),
+            ),
+            egui::ResizeDirection::North,
+        ),
+        (
+            egui::Rect::from_min_max(
+                egui::pos2(screen.left(), screen.bottom() - edge),
+                egui::pos2(screen.right(), screen.bottom()),
+            ),
+            egui::ResizeDirection::South,
+        ),
+        (
+            egui::Rect::from_min_max(
+                egui::pos2(screen.left(), screen.top()),
+                egui::pos2(screen.left() + edge, screen.bottom()),
+            ),
+            egui::ResizeDirection::West,
+        ),
+        (
+            egui::Rect::from_min_max(
+                egui::pos2(screen.right() - edge, screen.top()),
+                egui::pos2(screen.right(), screen.bottom()),
+            ),
+            egui::ResizeDirection::East,
+        ),
+        (
+            egui::Rect::from_min_max(screen.min, screen.min + egui::vec2(corner, corner)),
+            egui::ResizeDirection::NorthWest,
+        ),
+        (
+            egui::Rect::from_min_max(
+                egui::pos2(screen.right() - corner, screen.top()),
+                egui::pos2(screen.right(), screen.top() + corner),
+            ),
+            egui::ResizeDirection::NorthEast,
+        ),
+        (
+            egui::Rect::from_min_max(
+                egui::pos2(screen.left(), screen.bottom() - corner),
+                egui::pos2(screen.left() + corner, screen.bottom()),
+            ),
+            egui::ResizeDirection::SouthWest,
+        ),
+        (
+            egui::Rect::from_min_max(
+                egui::pos2(screen.right() - corner, screen.bottom() - corner),
+                egui::pos2(screen.right(), screen.bottom()),
+            ),
+            egui::ResizeDirection::SouthEast,
+        ),
+    ];
+
+    egui::Area::new(egui::Id::new("aura-resize-handles"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| {
+            ui.set_min_size(screen.size());
+            for (index, (rect, direction)) in handles.iter().enumerate() {
+                let response = ui.interact(
+                    *rect,
+                    egui::Id::new(("aura-resize", index)),
+                    Sense::drag(),
+                );
+                if response.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(*direction));
+                }
+            }
+        });
 }
 
 fn sidebar(app: &mut AuraApp, ui: &mut egui::Ui) {

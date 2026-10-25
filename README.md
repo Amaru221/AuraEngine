@@ -26,7 +26,7 @@ UI (egui)  ──►  WorkerW (capa del escritorio)  ──►  mpv --wid  ─�
 - **Bandeja del sistema** con menú completo.
 - **Actualizaciones automáticas** desde GitHub Releases, con verificación SHA-256 e instalación desde la propia app.
 - **Temas personalizables** en Ajustes → Apariencia: Aura Oscuro, Medianoche, Claro y Personalizado, con color de acento.
-- **Ventana translúcida** con opacidad configurable y barra lateral más oscura para contrastar con el contenedor principal.
+- **Ventana translúcida** con barra de título propia y opacidad independiente para el contenedor, la barra lateral y la barra de título, con modo vinculado.
 - **Atajos globales** (Ctrl+Alt+…).
 - **Biblioteca local** con miniaturas (mpv extrae el primer fotograma), búsqueda, filtros y favoritos.
 - **Catálogos online**: Wallhaven, Bing Daily, **MotionBGS** (live wallpapers 4K/1080p) y Pexels (clave opcional).
@@ -68,13 +68,13 @@ El instalador crea el grupo **Aura Engine** en el menú Inicio (busca "Aura Engi
 Instalación silenciosa:
 
 ```powershell
-.\aura-v1.0.13-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+.\aura-v1.0.14-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ```
 
 ### Opción B — Portable
 
 ```powershell
-cd .\dist\aura-v1.0.13-windows-x64
+cd .\dist\aura-v1.0.14-windows-x64
 .\aura.exe
 ```
 
@@ -110,7 +110,7 @@ cargo build --release
 .\scripts\build-installer.ps1 -Sign  # instalador Inno Setup
 ```
 
-Genera `dist\aura-v1.0.13-windows-x64.zip` y `dist\aura-v1.0.13-windows-x64-setup.exe`.
+Genera `dist\aura-v1.0.14-windows-x64.zip` y `dist\aura-v1.0.14-windows-x64-setup.exe`.
 El instalador necesita [Inno Setup 6](https://jrsoftware.org/isinfo.php)
 (`winget install --id JRSoftware.InnoSetup -e`).
 

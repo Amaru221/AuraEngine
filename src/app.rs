@@ -211,7 +211,11 @@ impl AuraApp {
         };
 
         theme::install_fonts(&cc.egui_ctx);
-        theme::set_opacity(cfg.window_opacity);
+        theme::set_opacities(
+            cfg.window_opacity,
+            cfg.nav_opacity,
+            cfg.title_opacity,
+        );
         theme::set_preset(cfg.theme_preset, cfg.theme_bg);
         theme::apply(&cc.egui_ctx, configured_accent);
 
@@ -841,6 +845,16 @@ impl AuraApp {
                 log::warn!("accent: {err:#}");
             }
         }
+    }
+
+    /// Re-applies all three opacity values and refreshes the egui visuals.
+    pub fn apply_opacities(&mut self, ctx: &egui::Context) {
+        theme::set_opacities(
+            self.cfg.window_opacity,
+            self.cfg.nav_opacity,
+            self.cfg.title_opacity,
+        );
+        theme::apply(ctx, self.accent);
     }
 
     // -----------------------------------------------------------------------
@@ -1541,6 +1555,7 @@ pub fn run(hidden: bool, action: Option<String>) -> anyhow::Result<()> {
         .with_inner_size([1240.0, 800.0])
         .with_min_inner_size([980.0, 620.0])
         .with_icon(Arc::new(icon))
+        .with_decorations(false)
         .with_transparent(true)
         .with_visible(true);
     if hidden {

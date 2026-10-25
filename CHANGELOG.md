@@ -2,6 +2,24 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [1.0.14] - 2026-10-25
+
+### Added
+
+- Custom, theme-aware title bar with the app logo, drag-to-move,
+  double-click to maximize, and minimize/maximize/close buttons.
+- Separate opacity controls for the main container, sidebar and title bar in
+  **Settings -> Appearance**, plus a "same opacity for all three" link and a
+  "match main" shortcut.
+- Edge and corner resize handles for the borderless window.
+- A subtle window border so the app keeps its shape on the desktop.
+
+### Changed
+
+- The title bar follows the selected theme and opacity instead of the native
+  Windows chrome.
+- Window decoration is client-side; the native title bar is gone.
+
 ## [1.0.13] - 2026-10-25
 
 ### Added

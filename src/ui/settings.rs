@@ -137,25 +137,67 @@ impl AuraApp {
                 });
             }
 
-            row(
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(self.strings.opacity_section)
+                    .size(12.0)
+                    .strong()
+                    .color(theme::text()),
+            );
+            ui.add_space(2.0);
+
+            let mut linked = self.cfg.opacity_linked;
+            if row_checkbox(
                 ui,
-                self.strings.window_opacity,
+                self.strings.opacity_link,
                 self.strings.window_opacity_hint,
-                |ui| {
-                    let mut opacity = self.cfg.window_opacity as u32;
-                    let slider = ui.add(
-                        egui::Slider::new(&mut opacity, 40..=100)
-                            .suffix("%")
-                            .integer(),
-                    );
-                    if slider.changed() {
-                        self.cfg.window_opacity = opacity as u8;
-                        theme::set_opacity(self.cfg.window_opacity);
-                        theme::apply(ui.ctx(), self.accent);
+                &mut linked,
+            ) {
+                self.cfg.opacity_linked = linked;
+                if linked {
+                    self.cfg.nav_opacity = self.cfg.window_opacity;
+                    self.cfg.title_opacity = self.cfg.window_opacity;
+                }
+                self.apply_opacities(ui.ctx());
+                self.mark_dirty();
+            }
+
+            if self.cfg.opacity_linked {
+                row(ui, self.strings.window_opacity, "", |ui| {
+                    let mut value = self.cfg.window_opacity;
+                    if opacity_slider(ui, &mut value) {
+                        self.cfg.window_opacity = value;
+                        self.cfg.nav_opacity = value;
+                        self.cfg.title_opacity = value;
+                        self.apply_opacities(ui.ctx());
                         self.mark_dirty();
                     }
-                },
-            );
+                });
+            } else {
+                let mut changed = false;
+                row(ui, self.strings.opacity_main, "", |ui| {
+                    changed |= opacity_slider(ui, &mut self.cfg.window_opacity);
+                });
+                row(ui, self.strings.opacity_nav, "", |ui| {
+                    changed |= opacity_slider(ui, &mut self.cfg.nav_opacity);
+                });
+                row(ui, self.strings.opacity_title, "", |ui| {
+                    changed |= opacity_slider(ui, &mut self.cfg.title_opacity);
+                });
+                if changed {
+                    self.apply_opacities(ui.ctx());
+                    self.mark_dirty();
+                }
+                ui.horizontal(|ui| {
+                    if ui.button(self.strings.opacity_match).clicked() {
+                        self.cfg.nav_opacity = self.cfg.window_opacity;
+                        self.cfg.title_opacity = self.cfg.window_opacity;
+                        self.apply_opacities(ui.ctx());
+                        self.mark_dirty();
+                    }
+                });
+            }
+            ui.add_space(4.0);
 
             row(
                 ui,
@@ -718,4 +760,19 @@ fn theme_name(strings: &crate::i18n::Strings, preset: ThemePreset) -> &'static s
         ThemePreset::Light => strings.theme_light,
         ThemePreset::Custom => strings.theme_custom,
     }
+}
+
+fn opacity_slider(ui: &mut egui::Ui, value: &mut u8) -> bool {
+    let mut current = *value as u32;
+    let changed = ui
+        .add(
+            egui::Slider::new(&mut current, 40..=100)
+                .suffix("%")
+                .integer(),
+        )
+        .changed();
+    if changed {
+        *value = current as u8;
+    }
+    changed
 }
