@@ -139,6 +139,26 @@ impl AuraApp {
 
             row(
                 ui,
+                self.strings.window_opacity,
+                self.strings.window_opacity_hint,
+                |ui| {
+                    let mut opacity = self.cfg.window_opacity as u32;
+                    let slider = ui.add(
+                        egui::Slider::new(&mut opacity, 40..=100)
+                            .suffix("%")
+                            .integer(),
+                    );
+                    if slider.changed() {
+                        self.cfg.window_opacity = opacity as u8;
+                        theme::set_opacity(self.cfg.window_opacity);
+                        theme::apply(ui.ctx(), self.accent);
+                        self.mark_dirty();
+                    }
+                },
+            );
+
+            row(
+                ui,
                 self.strings.theme_accent,
                 self.strings.theme_accent_hint,
                 |ui| {

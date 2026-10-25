@@ -2,6 +2,22 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [1.0.13] - 2026-10-25
+
+### Added
+
+- Translucent main window with a configurable opacity in
+  **Settings -> Appearance** (40-100%).
+- The left navigation bar uses a darker, slightly more opaque surface than
+  the content so it contrasts with the main container.
+
+### Changed
+
+- The window is created with a transparent surface and eframe clears with a
+  transparent color; the content panel paints the configured alpha so the
+  desktop shows through behind it.
+- Cards, dialogs and text remain opaque for readability.
+
 ## [1.0.12] - 2026-10-24
 
 ### Added

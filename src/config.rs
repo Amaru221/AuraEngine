@@ -228,6 +228,7 @@ pub struct Config {
     pub accent_color: Option<[u8; 3]>,
     pub theme_preset: ThemePreset,
     pub theme_bg: Option<[u8; 3]>,
+    pub window_opacity: u8,
     pub hud_style: HudStyle,
     pub parent_mode: ParentMode,
 
@@ -267,6 +268,7 @@ impl Default for Config {
             accent_color: None,
             theme_preset: ThemePreset::Dark,
             theme_bg: None,
+            window_opacity: 92,
             hud_style: HudStyle::Grid,
             parent_mode: ParentMode::Auto,
             mpv_path: None,
@@ -307,6 +309,7 @@ impl Config {
 
     fn normalize(&mut self) {
         self.volume = self.volume.min(100);
+        self.window_opacity = self.window_opacity.clamp(20, 100);
         self.library_dirs.retain(|p| !p.as_os_str().is_empty());
         if self.library_dirs.is_empty() {
             let defaults = Config::default();

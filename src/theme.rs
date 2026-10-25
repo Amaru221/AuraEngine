@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
 
 use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Visuals};
@@ -13,6 +14,7 @@ use crate::config::ThemePreset;
 #[derive(Clone, Copy, Debug)]
 pub struct Palette {
     pub bg: Color32,
+    pub nav: Color32,
     pub panel: Color32,
     pub card: Color32,
     pub card_hover: Color32,
@@ -26,6 +28,7 @@ pub struct Palette {
 impl Palette {
     pub const DARK: Self = Self {
         bg: Color32::from_rgb(10, 11, 15),
+        nav: Color32::from_rgb(6, 7, 10),
         panel: Color32::from_rgb(15, 17, 23),
         card: Color32::from_rgb(22, 25, 34),
         card_hover: Color32::from_rgb(30, 34, 46),
@@ -38,6 +41,7 @@ impl Palette {
 
     pub const MIDNIGHT: Self = Self {
         bg: Color32::from_rgb(6, 9, 20),
+        nav: Color32::from_rgb(3, 5, 12),
         panel: Color32::from_rgb(10, 14, 28),
         card: Color32::from_rgb(16, 22, 40),
         card_hover: Color32::from_rgb(23, 31, 54),
@@ -50,6 +54,7 @@ impl Palette {
 
     pub const LIGHT: Self = Self {
         bg: Color32::from_rgb(244, 246, 250),
+        nav: Color32::from_rgb(232, 235, 243),
         panel: Color32::from_rgb(252, 253, 255),
         card: Color32::from_rgb(255, 255, 255),
         card_hover: Color32::from_rgb(238, 242, 249),
@@ -70,6 +75,7 @@ impl Palette {
         };
         Self {
             bg,
+            nav: shade(bg, if light { -0.07 } else { -0.4 }),
             panel: shade(bg, panel_amount),
             card: shade(bg, card_amount),
             card_hover: shade(bg, hover_amount),
@@ -113,6 +119,21 @@ fn shade(color: Color32, amount: f32) -> Color32 {
 }
 
 static PALETTE: RwLock<Palette> = RwLock::new(Palette::DARK);
+static OPACITY: AtomicU8 = AtomicU8::new(92);
+
+pub fn set_opacity(percent: u8) {
+    OPACITY.store(percent.clamp(20, 100), Ordering::Relaxed);
+}
+
+fn opacity_alpha() -> u8 {
+    let percent = OPACITY.load(Ordering::Relaxed) as u16;
+    ((percent * 255 + 50) / 100) as u8
+}
+
+fn with_alpha(color: Color32, alpha: u8) -> Color32 {
+    let [r, g, b, _] = color.to_array();
+    Color32::from_rgba_unmultiplied(r, g, b, alpha)
+}
 
 pub fn set_preset(preset: ThemePreset, custom_bg: Option<[u8; 3]>) {
     let palette = match preset {
@@ -131,9 +152,17 @@ pub fn palette() -> Palette {
     *PALETTE.read().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Main content background, translucent according to the user's setting.
 pub fn bg() -> Color32 {
-    palette().bg
+    with_alpha(palette().bg, opacity_alpha())
 }
+
+/// Sidebar background: slightly darker and more opaque than the content.
+pub fn nav() -> Color32 {
+    let alpha = opacity_alpha().saturating_add(18).min(255);
+    with_alpha(palette().nav, alpha)
+}
+
 pub fn panel() -> Color32 {
     palette().panel
 }
@@ -267,7 +296,7 @@ pub fn apply(ctx: &egui::Context, accent: Color32) {
         Visuals::dark()
     };
 
-    visuals.panel_fill = palette.bg;
+    visuals.panel_fill = bg();
     visuals.window_fill = palette.panel;
     visuals.extreme_bg_color = if palette.light {
         palette.card

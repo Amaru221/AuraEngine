@@ -211,6 +211,7 @@ impl AuraApp {
         };
 
         theme::install_fonts(&cc.egui_ctx);
+        theme::set_opacity(cfg.window_opacity);
         theme::set_preset(cfg.theme_preset, cfg.theme_bg);
         theme::apply(&cc.egui_ctx, configured_accent);
 
@@ -1370,6 +1371,12 @@ impl AuraApp {
 }
 
 impl eframe::App for AuraApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // The main panels paint their own translucent background; clearing to
+        // transparent lets the desktop show through the configured opacity.
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if !self.startup_done {
             self.startup_done = true;
@@ -1506,10 +1513,6 @@ impl eframe::App for AuraApp {
         ctx.request_repaint_after(Duration::from_millis(interval));
     }
 
-    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        [0.04, 0.043, 0.06, 1.0]
-    }
-
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.engine.shutdown();
         if self.cfg.restore_on_exit {
@@ -1538,6 +1541,7 @@ pub fn run(hidden: bool, action: Option<String>) -> anyhow::Result<()> {
         .with_inner_size([1240.0, 800.0])
         .with_min_inner_size([980.0, 620.0])
         .with_icon(Arc::new(icon))
+        .with_transparent(true)
         .with_visible(true);
     if hidden {
         // Start off-screen; the window stays "visible" so eframe keeps running.

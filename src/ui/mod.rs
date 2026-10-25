@@ -19,7 +19,7 @@ pub fn main_ui(app: &mut AuraApp, ctx: &egui::Context) {
         .resizable(false)
         .frame(
             egui::Frame::NONE
-                .fill(theme::panel())
+                .fill(theme::nav())
                 .inner_margin(egui::Margin::symmetric(16, 18)),
         )
         .show(ctx, |ui| {
