@@ -2,6 +2,7 @@
 
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,7 +10,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde_json::json;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HANDLE, HWND};
+use windows::Win32::System::Pipes::PeekNamedPipe;
 
 use crate::config::Scaling;
 
@@ -31,6 +33,10 @@ pub struct MpvInstance {
     pub volume: u8,
     pub muted: bool,
     pub paused: bool,
+    /// Number of engine ticks left to re-send the last pause state. This
+    /// covers a command lost while mpv was starting without forcing playback
+    /// forever (which would fight the Windows media controls).
+    pause_reassert: u8,
     pub key: String,
     pub last_error: Option<String>,
 }
@@ -129,6 +135,7 @@ impl MpvInstance {
             volume,
             muted,
             paused: false,
+            pause_reassert: 0,
             key: key.to_string(),
             last_error: None,
         };
@@ -177,6 +184,9 @@ impl MpvInstance {
         log::debug!("set_paused [{}] {} (was {})", self.key, paused, self.paused);
         if self.paused != paused {
             self.paused = paused;
+            // Keep retrying for a few engine ticks in case the pipe was not
+            // ready yet, but stop afterwards so external media controls work.
+            self.pause_reassert = 8;
             self.send_command(json!(["set_property", "pause", paused]));
         }
     }
@@ -186,12 +196,18 @@ impl MpvInstance {
     pub fn set_paused_force(&mut self, paused: bool) {
         log::debug!("set_paused_force [{}] {}", self.key, paused);
         self.paused = paused;
+        self.pause_reassert = 8;
         self.send_command(json!(["set_property", "pause", paused]));
     }
 
-    /// Cheap idempotent re-send used by the engine tick. Recovers from a
-    /// command that was dropped while mpv was still opening its IPC pipe.
+    /// Re-sends the desired pause state for a short window after a change.
+    /// Not permanent: forcing the state every tick would override the Windows
+    /// media controls and mask external pause/resume actions.
     pub fn reassert_pause(&mut self) {
+        if self.pause_reassert == 0 {
+            return;
+        }
+        self.pause_reassert -= 1;
         self.send_command(json!(["set_property", "pause", self.paused]));
     }
 
@@ -212,111 +228,134 @@ impl MpvInstance {
     }
 
     pub fn stop(&mut self) {
+        self.stop_internal(false);
+    }
+
+    /// Used while shutting the application down. The process exit would kill
+    /// background reaper threads before they can kill a stuck mpv, leaving an
+    /// orphan video process behind.
+    pub fn stop_blocking(&mut self) {
+        self.stop_internal(true);
+    }
+
+    fn stop_internal(&mut self, blocking: bool) {
         log::debug!("stopping mpv for {}", self.key);
         self.send_command(json!(["quit"]));
+        self.pause_reassert = 0;
 
         let Some(mut child) = self.child.take() else {
             return;
         };
         let key = self.key.clone();
+        if blocking {
+            if reap_child(&mut child, &key) {
+                return;
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+
         // Reap the process on a background thread so the UI stays responsive.
         std::thread::Builder::new()
             .name("aura-mpv-reaper".into())
             .spawn(move || {
-                let deadline = Instant::now() + Duration::from_millis(700);
-                while Instant::now() < deadline {
-                    match child.try_wait() {
-                        Ok(Some(_)) => return,
-                        Ok(None) => std::thread::sleep(Duration::from_millis(30)),
-                        Err(_) => return,
-                    }
+                if reap_child(&mut child, &key) {
+                    return;
                 }
                 let _ = child.kill();
-                let deadline = Instant::now() + Duration::from_millis(600);
-                while Instant::now() < deadline {
-                    match child.try_wait() {
-                        Ok(Some(_)) | Err(_) => return,
-                        Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-                    }
-                }
-                log::warn!("mpv for {key} did not exit after kill");
+                let _ = child.wait();
             })
             .ok();
     }
+}
+
+/// Waits briefly for mpv to quit, returning true when it exited cleanly.
+fn reap_child(child: &mut Child, key: &str) -> bool {
+    let deadline = Instant::now() + Duration::from_millis(900);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(_) => return true,
+        }
+    }
+    log::warn!("mpv for {key} did not exit gracefully; killing it");
+    false
 }
 
 impl Ipc {
     fn connect(pipe: String) -> Self {
         let (commands, rx) = crossbeam_channel::unbounded::<serde_json::Value>();
 
-        // One writer thread per mpv instance. The connection is opened lazily
-        // and kept open afterwards: reconnecting for every command added
-        // latency (and occasionally lost a pause/resume write). There is no
-        // blocking reader on this socket, so writes cannot be stalled by the
-        // reader holding the pipe.
+        // Short-lived connection per command. A persistent connection with a
+        // cloned reader handle kept the pipe alive after a write failure, so
+        // mpv never accepted a reconnection and all later pause/quit commands
+        // were lost. Opening a fresh connection also lets us wait for mpv's
+        // acknowledgement before considering the command delivered.
         std::thread::Builder::new()
             .name("aura-mpv-writer".into())
             .spawn(move || {
-                let mut connection: Option<std::fs::File> = None;
                 while let Ok(value) = rx.recv() {
                     let mut text = value.to_string();
                     text.push('\n');
 
-                    // At most one reconnect attempt per command.
-                    for attempt in 0..2 {
-                        if connection.is_none() {
-                            match connect_pipe(&pipe, Duration::from_secs(2)) {
-                                Ok(file) => {
-                                    // Drain mpv's replies on a cloned handle;
-                                    // otherwise its pipe buffer eventually
-                                    // fills and the server stops reading.
-                                    if let Ok(mut reader) = file.try_clone() {
-                                        std::thread::Builder::new()
-                                            .name("aura-mpv-drain".into())
-                                            .spawn(move || {
-                                                let mut buf = [0u8; 4096];
-                                                loop {
-                                                    match reader.read(&mut buf) {
-                                                        Ok(0) | Err(_) => break,
-                                                        Ok(_) => {}
-                                                    }
-                                                }
-                                            })
-                                            .ok();
-                                    }
-                                    connection = Some(file)
-                                }
-                                Err(err) => {
-                                    log::warn!("mpv IPC not available: {err}");
-                                    break;
-                                }
-                            }
-                        }
-                        let Some(file) = connection.as_mut() else {
-                            break;
-                        };
-                        let write = file
-                            .write_all(text.as_bytes())
-                            .and_then(|_| file.flush());
-                        match write {
+                    let mut last_error = None;
+                    for attempt in 0..3 {
+                        match send_pipe_command(&pipe, &text) {
                             Ok(()) => {
                                 log::debug!("mpv IPC write: {}", text.trim_end());
+                                last_error = None;
                                 break;
                             }
                             Err(err) => {
-                                log::warn!("mpv IPC write failed: {err}");
-                                connection = None;
-                                if attempt == 1 {
-                                    log::warn!("mpv IPC write dropped after retry");
+                                last_error = Some(err);
+                                if attempt < 2 {
+                                    std::thread::sleep(Duration::from_millis(40));
                                 }
                             }
                         }
+                    }
+                    if let Some(err) = last_error {
+                        log::warn!("mpv IPC command lost after 3 attempts: {err}");
                     }
                 }
             })
             .ok();
 
         Self { commands }
+    }
+}
+
+/// Writes one command and waits briefly for mpv's reply. The reply is not
+/// parsed (commands are idempotent), but waiting makes a failed write visible
+/// and prevents the UI state from claiming success when nothing was sent.
+fn send_pipe_command(pipe: &str, text: &str) -> Result<()> {
+    let mut file = connect_pipe(pipe, Duration::from_millis(700))?;
+    file.write_all(text.as_bytes())
+        .and_then(|_| file.flush())?;
+
+    let handle = HANDLE(file.as_raw_handle());
+    let deadline = Instant::now() + Duration::from_millis(450);
+    let mut buffer = [0u8; 4096];
+    loop {
+        let mut available = 0u32;
+        let peek = unsafe {
+            PeekNamedPipe(handle, None, 0, None, Some(&mut available), None)
+        };
+        if peek.is_err() {
+            return Err(anyhow::anyhow!("mpv IPC closed before acknowledging"));
+        }
+        if available > 0 {
+            let _ = file.read(&mut buffer);
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            // The command was written; never treat a slow acknowledgement as
+            // a hard failure because mpv may still have applied it.
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 

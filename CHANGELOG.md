@@ -2,6 +2,23 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- Pause/resume/stop could stop reaching mpv after a failed IPC write. The
+  persistent connection kept a cloned reader handle alive, so mpv never
+  accepted a reconnection and the video stayed paused (including the Windows
+  media controls) until the app was restarted. Commands now use a short-lived
+  connection and wait for mpv's acknowledgement.
+- The play/pause button now toggles the real playback state instead of only
+  the manual pause flag, so a video paused by fullscreen/occlusion can be
+  resumed with one click.
+- Pause state is reasserted for a few ticks after a change and then stops,
+  avoiding both lost commands and fighting the Windows media controls.
+- Application shutdown now waits briefly for mpv and kills it if necessary,
+  preventing orphan mpv processes when the quit command cannot be delivered.
+
 ## [1.0.17] - 2026-10-25
 
 ### Added

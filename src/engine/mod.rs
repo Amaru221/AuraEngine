@@ -228,7 +228,13 @@ impl Engine {
     }
 
     pub fn shutdown(&mut self) {
-        self.stop_all();
+        let keys: Vec<String> = self.instances.keys().cloned().collect();
+        for key in keys {
+            if let Some(mut instance) = self.instances.remove(&key) {
+                instance.stop_blocking();
+            }
+        }
+        self.hosts.show_all(false);
     }
 
     pub fn set_scaling(&mut self, key: &str, scaling: Scaling) {
@@ -265,13 +271,13 @@ impl Engine {
     }
 
     pub fn toggle_user_paused(&mut self) -> bool {
-        let paused = !self.paused_user;
+        // Toggle the state the user can actually see/hear. Using only the
+        // manual flag made the first click a no-op when auto-pause was already
+        // active (fullscreen/occlusion): the video stayed paused and the
+        // button appeared broken.
+        let paused = !self.effective_pause;
         self.set_user_paused(paused);
         paused
-    }
-
-    pub fn is_user_paused(&self) -> bool {
-        self.paused_user
     }
 
     pub fn is_paused(&self) -> bool {

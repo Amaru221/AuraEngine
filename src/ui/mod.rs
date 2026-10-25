@@ -271,7 +271,7 @@ fn sidebar(app: &mut AuraApp, ui: &mut egui::Ui) {
             if icon_button(ui, size, theme::ICON_PREV, app.strings.prev).clicked() {
                 app.next_wallpaper(-1);
             }
-            let paused = app.engine.is_user_paused();
+            let paused = app.engine.is_paused();
             let icon = if paused { theme::ICON_PLAY } else { theme::ICON_PAUSE };
             let label = if paused { app.strings.resume } else { app.strings.pause };
             if icon_button(ui, size, icon, label).clicked() {
