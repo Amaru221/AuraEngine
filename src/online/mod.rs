@@ -4,10 +4,13 @@ mod motionbgs;
 
 pub use motionbgs::MotionBgsCategory;
 
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::config::MediaKind;
 use crate::util;
@@ -40,11 +43,13 @@ impl Provider {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RemoteItem {
     pub id: String,
     pub title: String,
     pub thumb_url: String,
+    /// Cached SHA-256 of `thumb_url`, computed once when the item is parsed.
+    pub thumb_key: String,
     pub full_url: String,
     pub page_url: String,
     pub kind: MediaKind,
@@ -52,12 +57,90 @@ pub struct RemoteItem {
     pub resolution: String,
 }
 
-fn client() -> Result<reqwest::blocking::Client> {
-    reqwest::blocking::Client::builder()
-        .user_agent("AuraEngine/1.0 (Windows live wallpaper manager)")
-        .timeout(Duration::from_secs(30))
-        .build()
-        .context("build http client")
+impl RemoteItem {
+    /// Stable cache key for the remote thumbnail.
+    pub fn thumb_key(&self) -> &str {
+        &self.thumb_key
+    }
+}
+
+/// Typed catalog failure. The UI uses this to tell an IP/Cloudflare block
+/// apart from a network outage or an empty search.
+#[derive(Clone, Debug)]
+pub enum SearchError {
+    /// The provider (currently MotionBGS) refused the connection at the edge.
+    Blocked { status: u16, detail: String },
+    RateLimited { retry_after: Option<u64> },
+    Offline(String),
+    Empty(String),
+    Other(String),
+}
+
+impl SearchError {
+    /// Small technical detail suitable for logs, not for the main UI title.
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            SearchError::Blocked { detail, .. } if !detail.is_empty() => Some(detail),
+            SearchError::Offline(detail)
+            | SearchError::Empty(detail)
+            | SearchError::Other(detail)
+                if !detail.is_empty() =>
+            {
+                Some(detail)
+            }
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for SearchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SearchError::Blocked { status, detail } => {
+                write!(f, "catalog blocked the connection (HTTP {status})")?;
+                if !detail.is_empty() {
+                    write!(f, ": {detail}")?;
+                }
+                Ok(())
+            }
+            SearchError::RateLimited { retry_after } => match retry_after {
+                Some(seconds) => write!(f, "catalog rate limit; retry in {seconds}s"),
+                None => write!(f, "catalog rate limit"),
+            },
+            SearchError::Offline(detail) => write!(f, "could not connect: {detail}"),
+            SearchError::Empty(detail) => write!(f, "no results: {detail}"),
+            SearchError::Other(detail) => write!(f, "{detail}"),
+        }
+    }
+}
+
+impl std::error::Error for SearchError {}
+
+impl From<anyhow::Error> for SearchError {
+    fn from(err: anyhow::Error) -> Self {
+        SearchError::Other(format!("{err:#}"))
+    }
+}
+
+/// One HTTP client for the whole process: reusing the TLS session and
+/// connection pool keeps catalog pages and thumbnails from paying the
+/// handshake cost on every request.
+pub fn http_client() -> Result<&'static reqwest::blocking::Client> {
+    static CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::blocking::Client::builder()
+                .user_agent("AuraEngine/1.0 (Windows live wallpaper manager)")
+                .timeout(Duration::from_secs(30))
+                .build()
+                .map_err(|err| format!("{err:#}"))
+        })
+        .as_ref()
+        .map_err(|err| anyhow!("build http client: {err}"))
+}
+
+fn client() -> Result<&'static reqwest::blocking::Client> {
+    http_client()
 }
 
 pub fn search(
@@ -66,13 +149,26 @@ pub fn search(
     page: u32,
     api_key: &str,
     category: MotionBgsCategory,
-) -> Result<Vec<RemoteItem>> {
+    force: bool,
+) -> std::result::Result<Vec<RemoteItem>, SearchError> {
     match provider {
-        Provider::Wallhaven => wallhaven(query, page, api_key),
-        Provider::Bing => bing(),
-        Provider::MotionBgs => motionbgs::search(query, page, category),
-        Provider::Pexels => pexels(query, page, api_key),
+        Provider::Wallhaven => {
+            wallhaven(query, page, api_key).map_err(SearchError::from)
+        }
+        Provider::Bing => bing().map_err(SearchError::from),
+        Provider::MotionBgs => motionbgs::search(query, page, category, force),
+        Provider::Pexels => pexels(query, page, api_key).map_err(SearchError::from),
     }
+}
+
+/// Browser URL for the current MotionBGS search/category, used by the
+/// "Open in browser" action when the app connection is blocked.
+pub fn motionbgs_page_url(
+    query: &str,
+    page: u32,
+    category: MotionBgsCategory,
+) -> String {
+    motionbgs::build_url(query, page, category)
 }
 
 fn wallhaven(query: &str, page: u32, api_key: &str) -> Result<Vec<RemoteItem>> {
@@ -127,9 +223,11 @@ fn wallhaven(query: &str, page: u32, api_key: &str) -> Result<Vec<RemoteItem>> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let thumb_key = util::cache_key_for_text(&thumb);
         out.push(RemoteItem {
             title: format!("Wallhaven {id}"),
             thumb_url: thumb,
+            thumb_key,
             full_url: full,
             page_url: item
                 .get("url")
@@ -173,6 +271,8 @@ fn bing() -> Result<Vec<RemoteItem>> {
             .and_then(|v| v.as_str())
             .unwrap_or("bing")
             .to_string();
+        let thumb_url = format!("https://www.bing.com{base}_400x240.jpg");
+        let thumb_key = util::cache_key_for_text(&thumb_url);
         out.push(RemoteItem {
             id: start.clone(),
             title: item
@@ -181,7 +281,8 @@ fn bing() -> Result<Vec<RemoteItem>> {
                 .filter(|s| !s.is_empty())
                 .unwrap_or("Bing Daily")
                 .to_string(),
-            thumb_url: format!("https://www.bing.com{base}_400x240.jpg"),
+            thumb_url,
+            thumb_key,
             full_url: format!("https://www.bing.com{base}_UHD.jpg"),
             page_url: "https://www.bing.com".into(),
             kind: MediaKind::Image,
@@ -250,13 +351,16 @@ fn pexels(query: &str, page: u32, api_key: &str) -> Result<Vec<RemoteItem>> {
         let Some((_, link, width, height)) = best else {
             continue;
         };
+        let thumb_url = item
+            .get("image")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let thumb_key = util::cache_key_for_text(&thumb_url);
         out.push(RemoteItem {
             title: format!("Pexels {id}"),
-            thumb_url: item
-                .get("image")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
+            thumb_url,
+            thumb_key,
             full_url: link,
             page_url: item
                 .get("url")
@@ -347,13 +451,6 @@ pub fn download_thumb(item: &RemoteItem, key: &str) -> Option<PathBuf> {
     let thumb = image.thumbnail(480, 270);
     thumb.save_with_format(&path, image::ImageFormat::Jpeg).ok()?;
     Some(path)
-}
-
-impl RemoteItem {
-    /// Stable cache key for the remote thumbnail.
-    pub fn thumb_key(&self) -> String {
-        util::cache_key_for_text(&self.thumb_url)
-    }
 }
 
 #[cfg(test)]

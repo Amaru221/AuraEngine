@@ -18,6 +18,7 @@ pub struct PauseEnv {
 }
 
 impl PauseEnv {
+    #[allow(dead_code)]
     pub fn describe(&self) -> String {
         let mut parts = Vec::new();
         if self.fullscreen {
@@ -77,6 +78,18 @@ impl Engine {
 
     pub fn mpv_available(&self) -> bool {
         self.mpv_path.is_some()
+    }
+
+    /// Monitors were enumerated by the last `tick`; reuse them from the UI
+    /// instead of enumerating the desktop a second time on every tick.
+    pub fn monitors(&self) -> &[MonitorInfo] {
+        &self.monitors
+    }
+
+    /// Seeds the monitor list before the first `tick`, so applying a saved
+    /// wallpaper during startup already knows the display geometry.
+    pub fn set_monitors(&mut self, monitors: Vec<MonitorInfo>) {
+        self.monitors = monitors;
     }
 
     /// Periodic housekeeping. Returns monitor keys whose host window was
@@ -142,6 +155,15 @@ impl Engine {
             }
             self.hosts.set_visible(&key, false);
             changed.push(key);
+        }
+
+        // Re-assert the desired pause state periodically. A single IPC write
+        // can be lost while mpv is still creating its pipe (especially right
+        // after switching wallpapers), which used to leave the pause button
+        // desynchronized. Re-sending the idempotent property every tick makes
+        // the UI and playback converge again within ~1 second.
+        for instance in self.instances.values_mut() {
+            instance.reassert_pause();
         }
 
         changed.sort();
@@ -237,7 +259,9 @@ impl Engine {
             // as soon as the condition disappears.
             self.auto_pause_override = true;
         }
-        self.apply_pause();
+        // Force the write even when the effective state did not change: the
+        // user pressed the button, so mpv must receive the command now.
+        self.apply_pause(true);
     }
 
     pub fn toggle_user_paused(&mut self) -> bool {
@@ -269,10 +293,10 @@ impl Engine {
         if !cfg.pause_on_battery {
             self.paused_env.battery = false;
         }
-        self.apply_pause();
+        self.apply_pause(false);
     }
 
-    fn apply_pause(&mut self) {
+    fn apply_pause(&mut self, force: bool) {
         let env_active = self.paused_env.fullscreen
             || self.paused_env.occluded
             || self.paused_env.battery;
@@ -281,10 +305,14 @@ impl Engine {
         }
         let effective =
             self.paused_user || (env_active && !self.auto_pause_override);
-        if effective != self.effective_pause {
+        if force || effective != self.effective_pause {
             self.effective_pause = effective;
             for instance in self.instances.values_mut() {
-                instance.set_paused(effective);
+                if force {
+                    instance.set_paused_force(effective);
+                } else {
+                    instance.set_paused(effective);
+                }
             }
         }
     }

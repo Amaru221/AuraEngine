@@ -1,7 +1,6 @@
 //! Thumbnail generation with an mpv frame extractor and a Shell fallback.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 
@@ -40,35 +39,44 @@ pub struct ThumbResult {
 const THUMB_W: u32 = 480;
 const THUMB_H: u32 = 270;
 
+/// Number of background decoders/downloaders. Thumbnails are generated in
+/// parallel so switching between catalogs no longer serializes behind the
+/// previous grid's images.
+const THUMB_WORKERS: usize = 4;
+
 pub fn spawn_worker() -> (Sender<ThumbRequest>, Receiver<ThumbResult>) {
     let (tx_req, rx_req) = crossbeam_channel::unbounded::<ThumbRequest>();
     let (tx_res, rx_res) = crossbeam_channel::unbounded::<ThumbResult>();
 
-    std::thread::Builder::new()
-        .name("aura-thumbs".into())
-        .spawn(move || {
-            unsafe {
-                let _ = windows::Win32::System::Com::CoInitializeEx(
-                    None,
-                    windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
-                );
-            }
-            while let Ok(request) = rx_req.recv() {
-                let result = match request {
-                    ThumbRequest::Local {
-                        key,
-                        path,
-                        kind,
-                        mpv,
-                    } => generate_local(&key, &path, kind, mpv.as_deref()),
-                    ThumbRequest::Remote { key, url } => generate_remote(&key, &url),
-                };
-                if tx_res.send(result).is_err() {
-                    break;
+    for index in 0..THUMB_WORKERS {
+        let rx_req = rx_req.clone();
+        let tx_res = tx_res.clone();
+        std::thread::Builder::new()
+            .name(format!("aura-thumbs-{index}"))
+            .spawn(move || {
+                unsafe {
+                    let _ = windows::Win32::System::Com::CoInitializeEx(
+                        None,
+                        windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+                    );
                 }
-            }
-        })
-        .ok();
+                while let Ok(request) = rx_req.recv() {
+                    let result = match request {
+                        ThumbRequest::Local {
+                            key,
+                            path,
+                            kind,
+                            mpv,
+                        } => generate_local(&key, &path, kind, mpv.as_deref()),
+                        ThumbRequest::Remote { key, url } => generate_remote(&key, &url),
+                    };
+                    if tx_res.send(result).is_err() {
+                        break;
+                    }
+                }
+            })
+            .ok();
+    }
 
     (tx_req, rx_res)
 }
@@ -137,12 +145,15 @@ fn generate_remote(key: &str, url: &str) -> ThumbResult {
     }
     let _ = std::fs::create_dir_all(util::thumbs_dir());
 
-    let bytes = reqwest::blocking::Client::builder()
-        .user_agent("AuraEngine/1.0")
-        .timeout(Duration::from_secs(30))
-        .build()
+    let bytes = crate::online::http_client()
         .ok()
-        .and_then(|client| client.get(url).send().ok())
+        .and_then(|client| {
+            client
+                .get(url)
+                .header(reqwest::header::USER_AGENT, "AuraEngine/1.0")
+                .send()
+                .ok()
+        })
         .and_then(|resp| resp.error_for_status().ok())
         .and_then(|resp| resp.bytes().ok());
 

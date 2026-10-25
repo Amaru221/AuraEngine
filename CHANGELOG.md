@@ -2,6 +2,61 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [1.0.17] - 2026-10-25
+
+### Added
+
+- Visible language picker in **Settings -> General** for Spanish, English and
+  French. The window, tray menu, status text and errors update immediately.
+- README screenshots for the library, Explore and Settings.
+
+### Performance
+
+- Library search and filters are cached and only rebuilt when the query,
+  filter, item list or favorites change. Item names/folders are pre-lowercased
+  during the scan, so a 25k-item collection is not re-scanned every frame.
+- Favorites use a `HashSet`, making favorite filters and card badges O(1).
+- Thumbnails are generated/downloaded by four parallel workers with a shared
+  HTTP client, and uploaded to the GPU in small per-frame batches.
+- Thumbnail textures are capped and evicted with an LRU policy (bounded GPU
+  memory when browsing several catalogs).
+- Explore loads on first visit instead of during startup, reuses one HTTP
+  client, borrows remote items instead of cloning them every frame, and caches
+  remote thumbnail keys.
+- The pause watcher skips disabled battery checks and enumerates all windows
+  once for every monitor instead of once per monitor.
+- Adaptive repaint pacing: 60 fps only for HUD animations, 20 fps while
+  loading, 5 Hz when idle and 2 Hz while parked in the tray.
+- Window creation is now hidden until the first themed frame is ready, which
+  removes the startup white/transparent flash.
+- Startup no longer waits three seconds for another instance: the
+  single-instance mutex makes the first launch skip the pipe probe, the mpv
+  version probe runs in the background and monitor enumeration happens once.
+- Applying a wallpaper no longer decodes the image for its accent color on the
+  UI thread.
+
+### Fixed
+
+- Switching providers while Explore was loading could leave the catalog stuck
+  on a spinner forever. Requests now carry a generation and stale results are
+  discarded.
+- Pause/resume is re-asserted every engine tick and explicit button presses
+  force an IPC write, so a command lost while mpv was starting no longer
+  desynchronizes the button.
+- mpv IPC keeps a persistent connection with a drain thread instead of
+  reconnecting for every command, cutting pause/resume latency.
+- A UTF-8 BOM in `config.json` (for example after editing it with Notepad)
+  no longer discards the configuration.
+- The legacy per-monitor thumbnail key is filled once at startup instead of
+  calling `metadata`/SHA-256 from the Displays page every frame.
+- MotionBGS failures are now classified: IP/Cloudflare block, rate limit,
+  network outage or empty search. A block shows a clear message recommending
+  a VPN/proxy, a button to open the site in the browser and a manual retry
+  only. Nothing is retried automatically.
+- Successful MotionBGS pages are cached in memory and on disk for 20 minutes.
+  Switching back to a category or repeating a search no longer hits the site;
+  **Refresh** and **Retry** bypass the cache explicitly.
+
 ## [1.0.16] - 2026-10-25
 
 ### Fixed

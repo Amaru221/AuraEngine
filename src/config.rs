@@ -23,8 +23,8 @@ impl Lang {
     pub fn native_name(self) -> &'static str {
         match self {
             Lang::En => "English",
-            Lang::Es => "Espanol",
-            Lang::Fr => "Francais",
+            Lang::Es => "Español",
+            Lang::Fr => "Français",
         }
     }
 
@@ -145,6 +145,7 @@ impl MediaKind {
         }
     }
 
+    #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
             MediaKind::Image => "IMAGE",
@@ -286,6 +287,13 @@ impl Default for Config {
     }
 }
 
+/// Parses a configuration file, tolerating the UTF-8 BOM that Notepad and
+/// Windows PowerShell add by default. Serde rejects it, which used to discard
+/// the whole configuration.
+fn parse_config(raw: &str) -> std::result::Result<Config, serde_json::Error> {
+    serde_json::from_str(raw.strip_prefix('\u{feff}').unwrap_or(raw))
+}
+
 impl Config {
     pub fn load() -> Self {
         let path = util::config_path();
@@ -293,7 +301,7 @@ impl Config {
             Ok(raw) => raw,
             Err(_) => return Self::default(),
         };
-        match serde_json::from_str::<Config>(&raw) {
+        match parse_config(&raw) {
             Ok(mut cfg) => {
                 if cfg.version < CURRENT_VERSION {
                     cfg.version = CURRENT_VERSION;
@@ -353,6 +361,7 @@ impl Config {
         self.assignments.remove(monitor_key);
     }
 
+    #[allow(dead_code)]
     pub fn is_favorite(&self, path: &Path) -> bool {
         self.favorites.iter().any(|f| f == path)
     }
@@ -419,6 +428,13 @@ mod tests {
             cfg.assignment_for("\\\\.\\DISPLAY1").unwrap().path,
             PathBuf::from("C:/b.mp4")
         );
+    }
+
+    #[test]
+    fn accepts_utf8_bom_from_notepad() {
+        let parsed = parse_config("\u{feff}{\"language\":\"fr\"}").expect("BOM config");
+        assert_eq!(parsed.language, Lang::Fr);
+        assert_eq!(parsed.version, CURRENT_VERSION);
     }
 
     #[test]

@@ -40,20 +40,39 @@ impl AuraApp {
 
     fn settings_general(&mut self, ui: &mut egui::Ui) {
         section_card(ui, self.strings.settings_general, |ui| {
-            row(ui, self.strings.language, "", |ui| {
-                let current = self.cfg.language;
-                let mut lang = current;
-                egui::ComboBox::from_id_salt("language")
-                    .selected_text(current.native_name())
-                    .width(160.0)
-                    .show_ui(ui, |ui| {
-                        for option in [Lang::En, Lang::Es, Lang::Fr] {
-                            ui.selectable_value(&mut lang, option, option.native_name());
+            row(ui, self.strings.language, self.strings.language_hint, |ui| {
+                // Visible segmented picker instead of a collapsed combo box:
+                // Spanish, English and French are one click away.
+                ui.horizontal(|ui| {
+                    // The parent row is right-to-left, so add the chips in
+                    // reverse to read "Español | English | Français".
+                    for option in [Lang::Fr, Lang::En, Lang::Es] {
+                        let selected = self.cfg.language == option;
+                        let text = RichText::new(option.native_name())
+                            .size(12.0)
+                            .color(if selected {
+                                theme::contrast_on(self.accent)
+                            } else {
+                                theme::muted()
+                            });
+                        let button = egui::Button::new(text)
+                            .fill(if selected {
+                                self.accent
+                            } else {
+                                theme::card()
+                            })
+                            .stroke(if selected {
+                                Stroke::NONE
+                            } else {
+                                Stroke::new(1.0_f32, theme::border())
+                            })
+                            .corner_radius(9)
+                            .min_size(Vec2::new(0.0, 28.0));
+                        if ui.add(button).clicked() && !selected {
+                            self.set_language(option);
                         }
-                    });
-                if lang != current {
-                    self.set_language(lang);
-                }
+                    }
+                });
             });
 
             let mut start = self.cfg.start_with_windows;
@@ -604,7 +623,7 @@ impl AuraApp {
 
             ui.add_space(10.0);
             ui.label(
-                RichText::new("Wallhaven API key (optional)")
+                RichText::new(strings.wallhaven_key)
                     .size(11.0)
                     .color(theme::muted()),
             );
@@ -674,7 +693,7 @@ impl AuraApp {
                         self.confirm_reset = false;
                     }
                     if ui.button(strings.reset_config).clicked() {
-                        self.reset_configuration();
+                        self.reset_configuration(ui.ctx());
                         self.confirm_reset = false;
                     }
                 });
@@ -684,9 +703,12 @@ impl AuraApp {
         });
     }
 
-    fn reset_configuration(&mut self) {
+    fn reset_configuration(&mut self, ctx: &egui::Context) {
         self.cfg = Config::default();
-        self.strings = crate::i18n::strings(self.cfg.language);
+        let language = self.cfg.language;
+        self.set_language(language);
+        self.favorites = self.cfg.favorites.iter().cloned().collect();
+        self.invalidate_filter();
         self.engine.refresh_mpv(self.cfg.mpv_path.clone());
         self.mpv_version = self
             .engine
@@ -694,6 +716,14 @@ impl AuraApp {
             .and_then(crate::engine::mpv::version);
         let _ = win::set_autostart(self.cfg.start_with_windows);
         self.accent = theme::DEFAULT_ACCENT;
+        self.applied_accent = theme::DEFAULT_ACCENT;
+        theme::set_opacities(
+            self.cfg.window_opacity,
+            self.cfg.nav_opacity,
+            self.cfg.title_opacity,
+        );
+        theme::set_preset(self.cfg.theme_preset, self.cfg.theme_bg);
+        theme::apply(ctx, self.accent);
         self.mark_dirty();
         self.rescan();
         self.info(self.strings.saved);

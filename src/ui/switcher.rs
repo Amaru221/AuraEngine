@@ -245,7 +245,7 @@ impl AuraApp {
                         painter.text(
                             egui::pos2(screen.center().x, screen.top() + 44.0),
                             Align2::CENTER_CENTER,
-                            "QUICK SWITCHER",
+                            strings.quick_switcher,
                             FontId::proportional(10.0),
                             accent,
                         );
@@ -262,7 +262,7 @@ impl AuraApp {
                             Align2::CENTER_CENTER,
                             format!(
                                 "{}  -  {}  -  {} / {}",
-                                current.kind.label(),
+                                crate::i18n::kind_label(current.kind, strings),
                                 current.folder,
                                 index + 1,
                                 len
@@ -357,8 +357,14 @@ impl AuraApp {
             self.toggle_pause();
         }
         if let Some(path) = favorite_path {
-            self.cfg.toggle_favorite(&path);
-            self.mark_dirty();
+            let was_favorite = self.favorites.contains(&path);
+            self.toggle_favorite(&path);
+            let toast = if was_favorite {
+                self.strings.toast_favorite_removed
+            } else {
+                self.strings.toast_favorite_added
+            };
+            self.info(toast);
         }
     }
 }

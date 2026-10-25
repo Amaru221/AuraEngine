@@ -41,6 +41,10 @@ try {
 
     Copy-Item "README.md", "LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.md", "THIRD_PARTY_LICENSES.txt", "SOURCE.txt", "CHANGELOG.md", "install.ps1", "uninstall.ps1" $dist
 
+    # README screenshots (relative links must resolve in the portable package).
+    New-Item -ItemType Directory -Force -Path "$dist\assets\screenshots" | Out-Null
+    Copy-Item "assets\screenshots\*" "$dist\assets\screenshots"
+
     $publicCert = Join-Path $root "certs\aura-selfsigned.cer"
     if (-not (Test-Path $publicCert)) {
         $publicCert = Join-Path $root "dist\certs\aura-selfsigned.cer"

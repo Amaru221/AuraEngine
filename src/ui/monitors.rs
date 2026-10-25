@@ -6,7 +6,7 @@ use eframe::egui;
 use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::app::AuraApp;
-use crate::config::{MediaKind, Scaling};
+use crate::config::Scaling;
 use crate::i18n;
 use crate::platform::win;
 use crate::scanner;
@@ -70,7 +70,7 @@ impl AuraApp {
             painter.text(
                 canvas.center(),
                 Align2::CENTER_CENTER,
-                "No displays detected",
+                self.strings.no_displays,
                 FontId::proportional(13.0),
                 theme::muted(),
             );
@@ -292,11 +292,7 @@ impl AuraApp {
                             );
                             super::pill(
                                 ui,
-                                if assignment.kind == MediaKind::Video {
-                                    "LIVE"
-                                } else {
-                                    "IMAGE"
-                                },
+                                i18n::kind_label(assignment.kind, self.strings),
                                 self.accent,
                             );
                         }

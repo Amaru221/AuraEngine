@@ -191,7 +191,11 @@ ui.add_space(16.0);
                         .show(ui, |ui| {
                             ui.set_width(560.0);
                             info_row(ui, self.strings.version, env!("CARGO_PKG_VERSION"));
-                            info_row(ui, "Platform", &format!("Windows {}", std::env::consts::ARCH));
+                            info_row(
+                                ui,
+                                self.strings.platform,
+                                &format!("Windows {}", std::env::consts::ARCH),
+                            );
                             info_row(
                                 ui,
                                 self.strings.status_monitors,

@@ -21,9 +21,36 @@ pub struct MediaItem {
     pub folder: String,
     /// Cached thumbnail cache key (hashing it on every frame was wasteful).
     pub thumb_key: String,
+    /// Lower-cased `name\nfolder`, ready for large-library filtering.
+    pub search_key: String,
 }
 
 impl MediaItem {
+    fn new(
+        path: PathBuf,
+        name: String,
+        kind: MediaKind,
+        size: u64,
+        modified_ms: u128,
+        folder: String,
+        thumb_key: String,
+    ) -> Self {
+        let search_key = format!(
+            "{}\n{}",
+            name.to_lowercase(),
+            folder.to_lowercase()
+        );
+        Self {
+            path,
+            name,
+            kind,
+            size,
+            modified_ms,
+            folder,
+            thumb_key,
+            search_key,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -111,15 +138,15 @@ fn scan(dirs: &[PathBuf], tx: &Sender<ScanEvent>) -> anyhow::Result<Vec<MediaIte
                 .unwrap_or_default();
 
             let thumb_key = util::file_cache_key(path, metadata.len(), modified_ms);
-            items.push(MediaItem {
-                kind: MediaKind::from_path(path),
-                path: path.to_path_buf(),
+            items.push(MediaItem::new(
+                path.to_path_buf(),
                 name,
-                size: metadata.len(),
+                MediaKind::from_path(path),
+                metadata.len(),
                 modified_ms,
                 folder,
                 thumb_key,
-            });
+            ));
 
             visited += 1;
             if visited % 250 == 0 {
@@ -159,14 +186,14 @@ pub fn item_for(path: &Path) -> Option<MediaItem> {
         .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    Some(MediaItem {
-        kind: MediaKind::from_path(path),
-        path: path.to_path_buf(),
+    Some(MediaItem::new(
+        path.to_path_buf(),
         name,
-        size: metadata.len(),
+        MediaKind::from_path(path),
+        metadata.len(),
         modified_ms,
         folder,
-        thumb_key: util::file_cache_key(path, metadata.len(), modified_ms),
-    })
+        util::file_cache_key(path, metadata.len(), modified_ms),
+    ))
 }
 

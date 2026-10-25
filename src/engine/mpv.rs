@@ -1,7 +1,7 @@
 ﻿//! mpv process management through named-pipe IPC.
 
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -181,6 +181,20 @@ impl MpvInstance {
         }
     }
 
+    /// Writes the pause property even when the cached value already matches.
+    /// Used for explicit user actions, which must never be a no-op.
+    pub fn set_paused_force(&mut self, paused: bool) {
+        log::debug!("set_paused_force [{}] {}", self.key, paused);
+        self.paused = paused;
+        self.send_command(json!(["set_property", "pause", paused]));
+    }
+
+    /// Cheap idempotent re-send used by the engine tick. Recovers from a
+    /// command that was dropped while mpv was still opening its IPC pipe.
+    pub fn reassert_pause(&mut self) {
+        self.send_command(json!(["set_property", "pause", self.paused]));
+    }
+
     pub fn is_alive(&mut self) -> bool {
         let status = match self.child.as_mut() {
             Some(child) => child.try_wait(),
@@ -235,25 +249,68 @@ impl Ipc {
     fn connect(pipe: String) -> Self {
         let (commands, rx) = crossbeam_channel::unbounded::<serde_json::Value>();
 
-        // A long-lived connection with a blocking reader can stall the writer
-        // (the reader holds the synchronous pipe while waiting for data), which
-        // made pause/resume arrive seconds late or get lost. Opening a short
-        // connection per command is fast and reliable.
+        // One writer thread per mpv instance. The connection is opened lazily
+        // and kept open afterwards: reconnecting for every command added
+        // latency (and occasionally lost a pause/resume write). There is no
+        // blocking reader on this socket, so writes cannot be stalled by the
+        // reader holding the pipe.
         std::thread::Builder::new()
             .name("aura-mpv-writer".into())
             .spawn(move || {
+                let mut connection: Option<std::fs::File> = None;
                 while let Ok(value) = rx.recv() {
                     let mut text = value.to_string();
                     text.push('\n');
-                    match connect_pipe(&pipe, Duration::from_secs(2)) {
-                        Ok(mut file) => {
-                            log::debug!("mpv IPC write: {}", text.trim_end());
-                            if let Err(err) = file.write_all(text.as_bytes()) {
-                                log::warn!("mpv IPC write failed: {err}");
+
+                    // At most one reconnect attempt per command.
+                    for attempt in 0..2 {
+                        if connection.is_none() {
+                            match connect_pipe(&pipe, Duration::from_secs(2)) {
+                                Ok(file) => {
+                                    // Drain mpv's replies on a cloned handle;
+                                    // otherwise its pipe buffer eventually
+                                    // fills and the server stops reading.
+                                    if let Ok(mut reader) = file.try_clone() {
+                                        std::thread::Builder::new()
+                                            .name("aura-mpv-drain".into())
+                                            .spawn(move || {
+                                                let mut buf = [0u8; 4096];
+                                                loop {
+                                                    match reader.read(&mut buf) {
+                                                        Ok(0) | Err(_) => break,
+                                                        Ok(_) => {}
+                                                    }
+                                                }
+                                            })
+                                            .ok();
+                                    }
+                                    connection = Some(file)
+                                }
+                                Err(err) => {
+                                    log::warn!("mpv IPC not available: {err}");
+                                    break;
+                                }
                             }
-                            let _ = file.flush();
                         }
-                        Err(err) => log::warn!("mpv IPC not available: {err}"),
+                        let Some(file) = connection.as_mut() else {
+                            break;
+                        };
+                        let write = file
+                            .write_all(text.as_bytes())
+                            .and_then(|_| file.flush());
+                        match write {
+                            Ok(()) => {
+                                log::debug!("mpv IPC write: {}", text.trim_end());
+                                break;
+                            }
+                            Err(err) => {
+                                log::warn!("mpv IPC write failed: {err}");
+                                connection = None;
+                                if attempt == 1 {
+                                    log::warn!("mpv IPC write dropped after retry");
+                                }
+                            }
+                        }
                     }
                 }
             })

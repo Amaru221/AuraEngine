@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -14,7 +15,7 @@ use crate::engine::installer::{self, InstallEvent};
 use crate::engine::{Engine, PauseEnv};
 use crate::hotkeys::{self, HotkeyAction, Hotkeys};
 use crate::i18n::{self, Strings};
-use crate::online::{self, MotionBgsCategory, Provider, RemoteItem};
+use crate::online::{self, MotionBgsCategory, Provider, RemoteItem, SearchError};
 use crate::platform::{ipc, static_wallpaper, win};
 use crate::update::{self, UpdateEvent, UpdateInfo};
 use crate::scanner::thumbs::{self, ThumbRequest, ThumbResult};
@@ -59,12 +60,15 @@ pub struct Toast {
 pub struct ThumbEntry {
     pub texture: TextureHandle,
     pub aspect: f32,
+    /// Monotonic use counter, used to evict textures that have not been
+    /// visible for a while instead of keeping every decoded frame forever.
+    pub last_used: u64,
 }
 
 pub struct RemoteSearchResult {
-    pub provider: Provider,
     pub page: u32,
-    pub result: Result<Vec<RemoteItem>, String>,
+    pub seq: u64,
+    pub result: Result<Vec<RemoteItem>, SearchError>,
 }
 
 pub struct DownloadResult {
@@ -88,21 +92,32 @@ pub struct AuraApp {
     pub scan_rx: Receiver<ScanEvent>,
     pub query: String,
     pub filter: Filter,
+    /// Cached result of `(query, filter, items, favorites)`. Rebuilt only when
+    /// one of those inputs changes, not on every frame.
+    filtered: Arc<Vec<usize>>,
+    filter_key: (String, Filter, usize, usize),
+    filter_dirty: bool,
+    /// O(1) favorite lookups for cards and filters.
+    pub favorites: HashSet<PathBuf>,
 
     pub thumb_tx: Sender<ThumbRequest>,
     pub thumb_rx: Receiver<ThumbResult>,
     pub thumbs: HashMap<String, ThumbEntry>,
     pub thumb_requests: HashSet<String>,
+    thumb_tick: u64,
 
-    pub remote: Vec<RemoteItem>,
+    pub remote: Arc<Vec<RemoteItem>>,
     pub remote_provider: Provider,
     pub motionbgs_category: MotionBgsCategory,
     pub remote_query: String,
     pub remote_page: u32,
     pub remote_loading: bool,
-    pub remote_error: Option<String>,
+    pub remote_error: Option<SearchError>,
     pub remote_tx: Sender<RemoteSearchResult>,
     pub remote_rx: Receiver<RemoteSearchResult>,
+    remote_seq: u64,
+    /// Explore is fetched on first visit instead of during startup.
+    pub explore_loaded: bool,
 
     pub download_tx: Sender<DownloadResult>,
     pub download_rx: Receiver<DownloadResult>,
@@ -114,6 +129,14 @@ pub struct AuraApp {
     pub install_progress: (u64, u64),
 
     pub accent: Color32,
+    /// Wallpaper accent extraction runs off the UI thread; `accent_seq`
+    /// discards results for wallpapers that were replaced in the meantime.
+    accent_tx: Sender<(u64, Option<Color32>)>,
+    accent_rx: Receiver<(u64, Option<Color32>)>,
+    accent_seq: u64,
+    /// Bitmask shared with the pause watcher: 1 fullscreen, 2 occlusion,
+    /// 4 battery. Disabled checks are never queried.
+    pause_flags: Arc<AtomicU8>,
     pub toast: Option<Toast>,
     /// Startup wallpaper restores emit "wallpaper applied" toasts that would
     /// replace the update notice; ignore informational toasts briefly.
@@ -152,11 +175,15 @@ pub struct AuraApp {
     pub hidden_lost_foreground: bool,
     pub quitting: bool,
     pub startup_done: bool,
+    /// The window is created hidden and revealed after the first painted
+    /// frame, which removes the white/transparent flash on startup.
+    pub revealed: bool,
     pub initial_action: Option<String>,
     pub main_hwnd: Option<isize>,
     pub parked: Option<bool>,
     pub applied_accent: Color32,
     pub mpv_version: Option<String>,
+    mpv_version_rx: Receiver<Option<String>>,
     pub restore_done: bool,
 
     pub monitor_scaling: HashMap<String, Scaling>,
@@ -187,6 +214,24 @@ fn hotkeys_enabled(fullscreen: bool, hud_open: bool) -> bool {
     !fullscreen || hud_open
 }
 
+const PAUSE_FULLSCREEN: u8 = 1;
+const PAUSE_OCCLUSION: u8 = 2;
+const PAUSE_BATTERY: u8 = 4;
+
+fn pause_flags(cfg: &Config) -> u8 {
+    let mut flags = 0;
+    if cfg.pause_on_fullscreen {
+        flags |= PAUSE_FULLSCREEN;
+    }
+    if cfg.pause_on_occlusion {
+        flags |= PAUSE_OCCLUSION;
+    }
+    if cfg.pause_on_battery {
+        flags |= PAUSE_BATTERY;
+    }
+    flags
+}
+
 impl AuraApp {
     fn new(
         cc: &eframe::CreationContext<'_>,
@@ -201,6 +246,16 @@ impl AuraApp {
             cfg.start_with_windows = win::autostart_enabled();
         }
         let strings = i18n::strings(cfg.language);
+
+        // Fill legacy assignments with their thumbnail keys once, instead of
+        // calling `metadata` + SHA-256 from the Displays page every frame.
+        for assignment in cfg.assignments.values_mut() {
+            if assignment.thumb_key.is_empty() && assignment.path.exists() {
+                if let Some(item) = scanner::item_for(&assignment.path) {
+                    assignment.thumb_key = item.thumb_key;
+                }
+            }
+        }
 
         let configured_accent = if cfg.accent_from_wallpaper {
             theme::DEFAULT_ACCENT
@@ -220,32 +275,50 @@ impl AuraApp {
         theme::apply(&cc.egui_ctx, configured_accent);
 
         let mut engine = Engine::new(cfg.mpv_path.clone());
-        // Probe mpv once. Doing this from the Settings page on every frame
-        // spawned a process continuously and pinned a CPU core.
-        let mpv_version = engine
-            .mpv_path()
-            .and_then(crate::engine::mpv::version);
+        // Probe mpv once, on a worker thread: spawning `mpv --version` is fast
+        // but it delayed the first frame (and it used to run every frame from
+        // the Settings page, pinning a CPU core).
+        let (mpv_version_tx, mpv_version_rx) = crossbeam_channel::bounded(1);
+        if let Some(mpv) = engine.mpv_path().map(Path::to_path_buf) {
+            std::thread::Builder::new()
+                .name("aura-mpv-version".into())
+                .spawn(move || {
+                    let _ = mpv_version_tx.send(crate::engine::mpv::version(&mpv));
+                })
+                .ok();
+        }
+        // Enumerate the desktop once at startup. `Engine::tick` will refresh
+        // the list later; calling it here as well created every WorkerW host
+        // twice before the first frame.
         let monitors = win::monitors();
-        let _ = engine.tick(&cfg);
+        engine.set_monitors(monitors.clone());
 
         let (scan_tx, scan_rx) = crossbeam_channel::unbounded();
         let (thumb_tx, thumb_rx) = thumbs::spawn_worker();
         let (remote_tx, remote_rx) = crossbeam_channel::unbounded();
         let (download_tx, download_rx) = crossbeam_channel::unbounded();
         let (pause_tx, pause_rx) = crossbeam_channel::bounded::<PauseEnv>(1);
+        let (accent_tx, accent_rx) = crossbeam_channel::unbounded();
+        let pause_flags = Arc::new(AtomicU8::new(pause_flags(&cfg)));
 
         // Fullscreen/occlusion/battery detection enumerates every top-level
-        // window, so it runs off the UI thread.
+        // window, so it runs off the UI thread. Disabled checks (and checks
+        // that are irrelevant for the current configuration) are skipped
+        // entirely instead of enumerating all windows for nothing.
+        let watcher_flags = pause_flags.clone();
         std::thread::Builder::new()
             .name("aura-pause-watch".into())
             .spawn(move || loop {
                 std::thread::sleep(Duration::from_millis(700));
+                let flags = watcher_flags.load(Ordering::Relaxed);
+                // Fullscreen is always measured because it also suspends the
+                // global shortcuts; occlusion/battery are config-gated.
+                let monitors = win::monitors();
                 let env = PauseEnv {
-                    fullscreen: win::is_fullscreen_app(),
-                    occluded: win::monitors()
-                        .iter()
-                        .any(|monitor| win::is_occluded(monitor.rect)),
-                    battery: win::on_battery(),
+                    fullscreen: win::is_fullscreen_app_on(&monitors),
+                    occluded: flags & PAUSE_OCCLUSION != 0
+                        && win::any_occluded(&monitors),
+                    battery: flags & PAUSE_BATTERY != 0 && win::on_battery(),
                 };
                 let _ = pause_tx.try_send(env);
             })
@@ -260,11 +333,16 @@ impl AuraApp {
             scan_rx,
             query: String::new(),
             filter: Filter::All,
+            filtered: Arc::new(Vec::new()),
+            filter_key: (String::new(), Filter::All, 0, 0),
+            filter_dirty: true,
+            favorites: cfg.favorites.iter().cloned().collect(),
             thumb_tx,
             thumb_rx,
             thumbs: HashMap::new(),
             thumb_requests: HashSet::new(),
-            remote: Vec::new(),
+            thumb_tick: 0,
+            remote: Arc::new(Vec::new()),
             remote_provider: Provider::Bing,
             motionbgs_category: MotionBgsCategory::All,
             remote_query: String::new(),
@@ -273,6 +351,8 @@ impl AuraApp {
             remote_error: None,
             remote_tx,
             remote_rx,
+            remote_seq: 0,
+            explore_loaded: false,
             download_tx,
             download_rx,
             downloading: HashSet::new(),
@@ -281,6 +361,10 @@ impl AuraApp {
             install_stage: String::new(),
             install_progress: (0, 0),
             accent: configured_accent,
+            accent_tx,
+            accent_rx,
+            accent_seq: 0,
+            pause_flags,
             toast: None,
             suppress_info_until: Some(Instant::now() + Duration::from_secs(5)),
             hud_open: false,
@@ -309,11 +393,13 @@ impl AuraApp {
             hidden_lost_foreground: false,
             quitting: false,
             startup_done: false,
+            revealed: false,
             initial_action,
             main_hwnd: None,
             parked: None,
             applied_accent: configured_accent,
-            mpv_version,
+            mpv_version: None,
+            mpv_version_rx,
             restore_done: false,
             monitor_scaling: HashMap::new(),
             retry_counts: HashMap::new(),
@@ -325,18 +411,33 @@ impl AuraApp {
 
         app.tray = tray::create(app.strings);
 
-        // Keep the event loop alive while the window is hidden in the tray.
+        // Low-frequency safety net: keeps tray/IPC polling alive even when a
+        // minimized window stops receiving redraw requests. The normal frame
+        // pacing below is much cheaper than the old unconditional 5 Hz wakeup.
         let repaint_ctx = cc.egui_ctx.clone();
         std::thread::Builder::new()
             .name("aura-ticker".into())
             .spawn(move || loop {
-                std::thread::sleep(Duration::from_millis(200));
+                std::thread::sleep(Duration::from_millis(1000));
                 repaint_ctx.request_repaint();
             })
             .ok();
 
+        if !hidden {
+            // Safety net if the platform does not deliver a first redraw while
+            // the window is still invisible.
+            let reveal_ctx = cc.egui_ctx.clone();
+            std::thread::Builder::new()
+                .name("aura-reveal".into())
+                .spawn(move || {
+                    std::thread::sleep(Duration::from_millis(300));
+                    reveal_ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    reveal_ctx.request_repaint();
+                })
+                .ok();
+        }
+
         app.rescan();
-        app.search_online(true);
         app.init_updates(&cc.egui_ctx);
 
         if app.cfg.start_with_windows != win::autostart_enabled() {
@@ -399,34 +500,59 @@ impl AuraApp {
         scanner::scan_async(self.cfg.library_dirs.clone(), self.scan_tx.clone());
     }
 
-    /// Filtered indices into `self.items`. Returning indices avoids cloning
-    /// the whole library on every frame.
-    pub fn filtered_indices(&self) -> Vec<usize> {
-        let query = self.query.trim().to_lowercase();
-        self.items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| match self.filter {
-                Filter::All => true,
-                Filter::Live => item.kind == MediaKind::Video,
-                Filter::Images => item.kind == MediaKind::Image,
-                Filter::Favorites => self.cfg.is_favorite(&item.path),
-            })
-            .filter(|(_, item)| {
-                query.is_empty()
-                    || item.name.to_lowercase().contains(&query)
-                    || item.folder.to_lowercase().contains(&query)
-            })
-            .map(|(index, _)| index)
-            .collect()
+    pub fn invalidate_filter(&mut self) {
+        self.filter_dirty = true;
+    }
+
+    /// Filtered indices into `self.items`, cached between frames. Returning
+    /// indices avoids cloning the whole library; the cache means a 25k-item
+    /// collection is not re-scanned and re-lower-cased on every repaint.
+    pub fn filtered_indices(&mut self) -> Arc<Vec<usize>> {
+        let key = (
+            self.query.clone(),
+            self.filter,
+            self.items.len(),
+            self.cfg.favorites.len(),
+        );
+        if self.filter_dirty || self.filter_key != key {
+            let query = self.query.trim().to_lowercase();
+            let empty = query.is_empty();
+            let mut indices = Vec::with_capacity(self.items.len());
+            for (index, item) in self.items.iter().enumerate() {
+                let kind_ok = match self.filter {
+                    Filter::All => true,
+                    Filter::Live => item.kind == MediaKind::Video,
+                    Filter::Images => item.kind == MediaKind::Image,
+                    Filter::Favorites => self.favorites.contains(&item.path),
+                };
+                if kind_ok && (empty || item.search_key.contains(&query)) {
+                    indices.push(index);
+                }
+            }
+            self.filtered = Arc::new(indices);
+            self.filter_key = key;
+            self.filter_dirty = false;
+        }
+        self.filtered.clone()
     }
 
     /// Full filtered snapshot. Used when opening the quick switcher.
-    pub fn filtered_items(&self) -> Vec<MediaItem> {
+    pub fn filtered_items(&mut self) -> Vec<MediaItem> {
         self.filtered_indices()
-            .into_iter()
-            .map(|index| self.items[index].clone())
+            .iter()
+            .map(|&index| self.items[index].clone())
             .collect()
+    }
+
+    pub fn toggle_favorite(&mut self, path: &Path) {
+        self.cfg.toggle_favorite(path);
+        if self.favorites.contains(path) {
+            self.favorites.remove(path);
+        } else {
+            self.favorites.insert(path.to_path_buf());
+        }
+        self.invalidate_filter();
+        self.mark_dirty();
     }
 
     // -----------------------------------------------------------------------
@@ -442,10 +568,11 @@ impl AuraApp {
     }
 
     pub fn request_thumb_by_key(&mut self, key: String, path: &Path, kind: MediaKind) {
-        if key.is_empty()
-            || self.thumbs.contains_key(&key)
-            || !self.thumb_requests.insert(key.clone())
-        {
+        if key.is_empty() {
+            return;
+        }
+        self.touch_thumb(&key);
+        if self.thumbs.contains_key(&key) || !self.thumb_requests.insert(key.clone()) {
             return;
         }
         let _ = self.thumb_tx.send(ThumbRequest::Local {
@@ -458,17 +585,50 @@ impl AuraApp {
 
     pub fn request_remote_thumb(&mut self, item: &RemoteItem) {
         let key = item.thumb_key();
-        if self.thumbs.contains_key(&key) || !self.thumb_requests.insert(key.clone()) {
+        self.touch_thumb(key);
+        if self.thumbs.contains_key(key) || !self.thumb_requests.insert(key.to_string()) {
             return;
         }
         let _ = self.thumb_tx.send(ThumbRequest::Remote {
-            key,
+            key: key.to_string(),
             url: item.thumb_url.clone(),
         });
     }
 
+    fn touch_thumb(&mut self, key: &str) {
+        self.thumb_tick = self.thumb_tick.wrapping_add(1);
+        let tick = self.thumb_tick;
+        if let Some(entry) = self.thumbs.get_mut(key) {
+            entry.last_used = tick;
+        }
+    }
+
+    /// Bounds GPU memory: browsing several large catalogs used to keep every
+    /// decoded texture alive for the rest of the session.
+    fn trim_thumbs(&mut self) {
+        const MAX_THUMBS: usize = 160;
+        while self.thumbs.len() > MAX_THUMBS {
+            let Some(oldest) = self
+                .thumbs
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.thumbs.remove(&oldest);
+        }
+    }
+
     fn poll_thumbs(&mut self, ctx: &egui::Context) {
-        while let Ok(result) = self.thumb_rx.try_recv() {
+        // Convert a few textures per frame so a burst of finished thumbnails
+        // cannot stall one frame with dozens of uploads.
+        let mut budget = 6;
+        while budget > 0 {
+            let Ok(result) = self.thumb_rx.try_recv() else {
+                break;
+            };
+            budget -= 1;
             self.thumb_requests.remove(&result.key);
             let Some(raw) = result.image else {
                 continue;
@@ -480,27 +640,52 @@ impl AuraApp {
             let texture =
                 ctx.load_texture(result.key.clone(), image, egui::TextureOptions::LINEAR);
             let aspect = raw.width as f32 / raw.height.max(1) as f32;
+            self.thumb_tick = self.thumb_tick.wrapping_add(1);
             self.thumbs.insert(
                 result.key,
-                ThumbEntry { texture, aspect },
+                ThumbEntry {
+                    texture,
+                    aspect,
+                    last_used: self.thumb_tick,
+                },
             );
         }
+        self.trim_thumbs();
     }
 
     // -----------------------------------------------------------------------
     // Online catalogs
     // -----------------------------------------------------------------------
 
+    /// Catalog search. Cached results are reused when available.
     pub fn search_online(&mut self, reset: bool) {
-        if self.remote_loading {
-            return;
-        }
+        self.search_online_opts(reset, false);
+    }
+
+    /// Explicit refresh: clears the current page and bypasses the cache.
+    pub fn refresh_online(&mut self) {
+        self.search_online_opts(true, true);
+    }
+
+    /// Manual retry after a failure. Keeps the current page but bypasses the
+    /// cache; nothing is retried automatically.
+    pub fn retry_online(&mut self) {
+        self.search_online_opts(false, true);
+    }
+
+    fn search_online_opts(&mut self, reset: bool, force: bool) {
+        // A new request is always allowed to supersede an in-flight one.
+        // Previously switching providers while a search was loading left
+        // `remote_loading` stuck forever and the new grid empty.
+        self.remote_seq = self.remote_seq.wrapping_add(1);
+        let seq = self.remote_seq;
         if reset {
             self.remote_page = 1;
-            self.remote.clear();
+            self.remote = Arc::new(Vec::new());
         }
         self.remote_loading = true;
         self.remote_error = None;
+        self.explore_loaded = true;
 
         let provider = self.remote_provider;
         let category = self.motionbgs_category;
@@ -516,13 +701,10 @@ impl AuraApp {
         std::thread::Builder::new()
             .name("aura-online".into())
             .spawn(move || {
-                let result = online::search(provider, &query, page, &key, category)
-                    .map_err(|e| format!("{e:#}"));
-                let _ = tx.send(RemoteSearchResult {
-                    provider,
-                    page,
-                    result,
-                });
+                let result = online::search(
+                    provider, &query, page, &key, category, force,
+                );
+                let _ = tx.send(RemoteSearchResult { page, seq, result });
             })
             .ok();
     }
@@ -663,6 +845,7 @@ impl AuraApp {
         if let Some(item) = item {
             if !self.items.iter().any(|i| i.path == item.path) {
                 self.items.insert(0, item);
+                self.invalidate_filter();
             }
         }
 
@@ -790,6 +973,26 @@ impl AuraApp {
         }
     }
 
+    /// Localized description of why auto-pause is active.
+    pub fn pause_reason(&self) -> String {
+        let env = self.engine.env();
+        let mut parts = Vec::new();
+        if env.fullscreen {
+            parts.push(self.strings.pause_fullscreen_reason);
+        }
+        if env.occluded {
+            parts.push(self.strings.pause_occluded_reason);
+        }
+        if env.battery {
+            parts.push(self.strings.pause_battery_reason);
+        }
+        if parts.is_empty() {
+            self.strings.pause_none_reason.to_string()
+        } else {
+            parts.join(", ")
+        }
+    }
+
     pub fn next_wallpaper(&mut self, delta: isize) {
         if self.items.is_empty() {
             self.error(self.strings.empty_library);
@@ -813,14 +1016,40 @@ impl AuraApp {
         if !self.cfg.accent_from_wallpaper {
             return;
         }
-        let accent = theme::accent_from_path(path).map(|(color, _)| color).or_else(|| {
-            let item = self.items.iter().find(|i| i.path == path)?;
-            let key = Self::thumb_key_for(item);
-            let thumb = util::thumbs_dir().join(format!("{key}.jpg"));
-            theme::accent_from_path(&thumb).map(|(color, _)| color)
-        });
-        if let Some(accent) = accent {
-            self.set_accent(accent);
+        // Decoding a 4K image (or probing a video) took long enough to stall
+        // the click that applied the wallpaper, so do it on a worker thread.
+        self.accent_seq = self.accent_seq.wrapping_add(1);
+        let seq = self.accent_seq;
+        let path = path.to_path_buf();
+        let thumb = self
+            .items
+            .iter()
+            .find(|item| item.path == path)
+            .map(|item| {
+                util::thumbs_dir().join(format!("{}.jpg", Self::thumb_key_for(item)))
+            });
+        let tx = self.accent_tx.clone();
+        std::thread::Builder::new()
+            .name("aura-accent".into())
+            .spawn(move || {
+                let accent = theme::accent_from_path(&path)
+                    .map(|(color, _)| color)
+                    .or_else(|| {
+                        let thumb = thumb?;
+                        theme::accent_from_path(&thumb).map(|(color, _)| color)
+                    });
+                let _ = tx.send((seq, accent));
+            })
+            .ok();
+    }
+
+    fn poll_accent(&mut self) {
+        while let Ok((seq, accent)) = self.accent_rx.try_recv() {
+            if seq == self.accent_seq {
+                if let Some(accent) = accent {
+                    self.set_accent(accent);
+                }
+            }
         }
     }
 
@@ -1277,16 +1506,18 @@ impl AuraApp {
         }
         self.last_tick = Instant::now();
 
+        // Engine::tick already enumerated the desktop; reuse that snapshot
+        // instead of calling EnumDisplayMonitors a second time in this tick.
         let changed = self.engine.tick(&self.cfg);
 
-        let monitors = win::monitors();
-        if monitors.len() != self.monitors.len()
-            || monitors
+        let fresh = self.engine.monitors();
+        if fresh.len() != self.monitors.len()
+            || fresh
                 .iter()
                 .zip(self.monitors.iter())
-                .any(|(a, b)| a.key != b.key || a.rect != b.rect)
+                .any(|(a, b)| a.key != b.key || a.rect != b.rect || a.dpi != b.dpi)
         {
-            self.monitors = monitors;
+            self.monitors = fresh.to_vec();
             // Keep per-monitor scaling selections in sync with reality.
             for monitor in &self.monitors {
                 self.monitor_scaling
@@ -1306,9 +1537,16 @@ impl AuraApp {
     }
 
     fn poll_pause(&mut self) {
-        // The watcher thread does the expensive window enumeration; the UI
-        // only applies the latest snapshot.
-        while let Ok(mut env) = self.pause_rx.try_recv() {
+        self.pause_flags
+            .store(pause_flags(&self.cfg), Ordering::Relaxed);
+
+        // The watcher thread does the expensive window enumeration; only the
+        // newest snapshot matters, so drain without applying stale states.
+        let mut latest = None;
+        while let Ok(env) = self.pause_rx.try_recv() {
+            latest = Some(env);
+        }
+        if let Some(mut env) = latest {
             // While a fullscreen app (usually a game) is in the foreground,
             // unregister the global shortcuts so they reach the game instead
             // of being swallowed by Windows. They are restored when the app
@@ -1439,6 +1677,9 @@ impl eframe::App for AuraApp {
         self.poll_hotkeys();
         self.poll_thumbs(ctx);
         self.poll_install();
+        if let Ok(version) = self.mpv_version_rx.try_recv() {
+            self.mpv_version = version;
+        }
         self.handle_dropped_files(ctx);
         self.handle_close_request(ctx);
 
@@ -1448,6 +1689,7 @@ impl eframe::App for AuraApp {
                 ScanEvent::Done(items) => {
                     self.items = items;
                     self.scanning = false;
+                    self.invalidate_filter();
                 }
                 ScanEvent::Failed(error) => {
                     self.scanning = false;
@@ -1457,19 +1699,21 @@ impl eframe::App for AuraApp {
         }
 
         while let Ok(result) = self.remote_rx.try_recv() {
-            if result.provider != self.remote_provider {
+            // Ignore results from a search the user already replaced.
+            if result.seq != self.remote_seq {
                 continue;
             }
             self.remote_loading = false;
             match result.result {
                 Ok(mut items) => {
                     if result.page <= 1 {
-                        self.remote.clear();
+                        self.remote = Arc::new(Vec::new());
                     }
-                    self.remote.append(&mut items);
+                    Arc::make_mut(&mut self.remote).append(&mut items);
                     self.remote_page = result.page;
                 }
                 Err(error) => {
+                    log::warn!("catalog search failed: {error}");
                     self.remote_error = Some(error);
                 }
             }
@@ -1483,6 +1727,7 @@ impl eframe::App for AuraApp {
                     if let Some(item) = scanner::item_for(&path) {
                         if !self.items.iter().any(|i| i.path == item.path) {
                             self.items.insert(0, item);
+                            self.invalidate_filter();
                         }
                     }
                     if result.apply {
@@ -1496,8 +1741,13 @@ impl eframe::App for AuraApp {
             self.downloading.remove(&result.id);
         }
 
+        if self.nav == Nav::Explore && !self.explore_loaded {
+            self.search_online(true);
+        }
+
         self.tick_engine();
         self.poll_pause();
+        self.poll_accent();
         self.poll_updates(ctx);
 
         if self.accent != self.applied_accent {
@@ -1542,9 +1792,33 @@ impl eframe::App for AuraApp {
             }
         }
 
-        // Keep the UI smooth while visible, and only poll occasionally while
-        // parked in the tray.
-        let interval = if self.hidden { 250 } else { 60 };
+        // Reveal the window only after a fully themed frame has been painted.
+        // Creating it visible made the transparent surface flash white while
+        // the GL context was still starting up.
+        if !self.revealed {
+            self.revealed = true;
+            if !self.hidden {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            }
+        }
+
+        // Animate only when something is actually moving. egui repaints on
+        // input by itself, so a static page can idle at 5 Hz instead of 60.
+        let busy = self.scanning
+            || self.remote_loading
+            || self.installing
+            || self.update_checking
+            || self.update_downloading
+            || self.toast.is_some();
+        let interval = if self.hud_open {
+            16
+        } else if self.hidden {
+            500
+        } else if busy {
+            50
+        } else {
+            200
+        };
         ctx.request_repaint_after(Duration::from_millis(interval));
     }
 
@@ -1565,6 +1839,10 @@ impl Drop for AuraApp {
 }
 
 pub fn run(hidden: bool, action: Option<String>) -> anyhow::Result<()> {
+    // `start_hidden` affects how the viewport is created, so read it before
+    // building the window. Avoids briefly flashing a normal window on screen
+    // when the user asked Aura to start minimized.
+    let hidden = hidden || crate::config::Config::load().start_hidden;
     let icon = egui::IconData {
         rgba: tray::icon_rgba(),
         width: 32,
@@ -1578,15 +1856,17 @@ pub fn run(hidden: bool, action: Option<String>) -> anyhow::Result<()> {
         .with_icon(Arc::new(icon))
         .with_decorations(false)
         .with_transparent(true)
-        .with_visible(true);
+        // A normal launch stays hidden until the first themed frame has been
+        // rendered; `--hidden` keeps the window visible but parked off-screen
+        // so eframe keeps pumping its event loop for the tray and engine.
+        .with_visible(hidden);
     if hidden {
-        // Start off-screen; the window stays "visible" so eframe keeps running.
         viewport = viewport.with_position([-32000.0, -32000.0]);
     }
 
     let options = eframe::NativeOptions {
         viewport,
-        centered: true,
+        centered: !hidden,
         ..Default::default()
     };
 
@@ -1601,7 +1881,22 @@ pub fn run(hidden: bool, action: Option<String>) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::parked_step;
+    use super::{pause_flags, parked_step, PAUSE_BATTERY, PAUSE_FULLSCREEN, PAUSE_OCCLUSION};
+    use crate::config::Config;
+
+    #[test]
+    fn pause_flags_only_include_enabled_checks() {
+        let mut cfg = Config::default();
+        cfg.pause_on_fullscreen = true;
+        cfg.pause_on_occlusion = false;
+        cfg.pause_on_battery = true;
+        assert_eq!(pause_flags(&cfg), PAUSE_FULLSCREEN | PAUSE_BATTERY);
+        cfg.pause_on_fullscreen = false;
+        cfg.pause_on_battery = false;
+        assert_eq!(pause_flags(&cfg), 0);
+        cfg.pause_on_occlusion = true;
+        assert_eq!(pause_flags(&cfg), PAUSE_OCCLUSION);
+    }
 
     #[test]
     fn hidden_startup_activation_does_not_restore() {

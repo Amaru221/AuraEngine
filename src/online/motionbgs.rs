@@ -4,12 +4,14 @@
 //! HTML cards used by the browser. This mirrors the approach of the original
 //! Linux Aura client.
 
-use std::collections::HashSet;
-use std::time::Duration;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
-use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
 
-use super::RemoteItem;
+use super::{RemoteItem, SearchError};
 use crate::config::MediaKind;
 
 const BASE: &str = "https://motionbgs.com";
@@ -72,32 +74,310 @@ pub fn search(
     query: &str,
     page: u32,
     category: MotionBgsCategory,
-) -> Result<Vec<RemoteItem>> {
-    let url = build_url(query, page, category);
+    force: bool,
+) -> std::result::Result<Vec<RemoteItem>, SearchError> {
+    if !force {
+        if let Some(items) = load_cached(query, page, category) {
+            log::debug!(
+                "MotionBGS cache hit ({} cards, query={query:?}, page={page}, {})",
+                items.len(),
+                category.id()
+            );
+            return Ok(items);
+        }
+    }
 
-    let html = reqwest::blocking::Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(Duration::from_secs(25))
-        .build()
-        .context("build motionbgs client")?
+    let url = build_url(query, page, category);
+    let client = super::http_client()
+        .map_err(|err| SearchError::Other(format!("{err:#}")))?;
+    let response = client
         .get(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
         .header(
             "Accept",
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         )
         .header("Accept-Language", "en-US,en;q=0.9")
         .send()
-        .context("request motionbgs")?
-        .error_for_status()
-        .context("motionbgs HTTP error")?
-        .text()
-        .context("read motionbgs response")?;
+        .map_err(request_error)?;
 
-    let items = parse_html(&html);
-    if items.is_empty() {
-        return Err(anyhow!("MotionBGS returned no wallpapers for this query"));
+    let status = response.status();
+    let status_code = status.as_u16();
+    let retry_after = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    let cf_mitigated = response
+        .headers()
+        .get("cf-mitigated")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let cf_ray = response
+        .headers()
+        .get("cf-ray")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+
+    let body = response
+        .text()
+        .map_err(|err| SearchError::Offline(format!("reading response: {err}")))?;
+
+    if status_code == 429 {
+        log::warn!(
+            "MotionBGS rate limit (cf-ray={:?}, retry-after={:?})",
+            cf_ray,
+            retry_after
+        );
+        return Err(SearchError::RateLimited { retry_after });
     }
+
+    if status_code == 403 {
+        let detail = block_detail(status_code, cf_ray.as_deref(), cf_mitigated.as_deref());
+        log::warn!("MotionBGS blocked: {detail}");
+        return Err(SearchError::Blocked {
+            status: status_code,
+            detail,
+        });
+    }
+
+    if !status.is_success() {
+        if is_block_body(&body) {
+            let detail = block_detail(
+                status_code,
+                cf_ray.as_deref(),
+                cf_mitigated.as_deref(),
+            );
+            log::warn!("MotionBGS challenge/block: {detail}");
+            return Err(SearchError::Blocked {
+                status: status_code,
+                detail,
+            });
+        }
+        return Err(SearchError::Other(format!("MotionBGS HTTP {status}")));
+    }
+
+    let items = parse_html(&body);
+    if items.is_empty() {
+        // A successful response can still be a Cloudflare challenge page.
+        if is_block_body(&body) {
+            let detail = block_detail(
+                status_code,
+                cf_ray.as_deref(),
+                cf_mitigated.as_deref(),
+            );
+            log::warn!("MotionBGS challenge page: {detail}");
+            return Err(SearchError::Blocked {
+                status: status_code,
+                detail,
+            });
+        }
+        return Err(SearchError::Empty(
+            "MotionBGS returned no wallpapers for this search".into(),
+        ));
+    }
+
+    store_cached(query, page, category, &items);
     Ok(items)
+}
+
+fn request_error(err: reqwest::Error) -> SearchError {
+    if err.is_timeout() {
+        SearchError::Offline("the request timed out".into())
+    } else if err.is_connect() {
+        SearchError::Offline(format!("connection failed: {err}"))
+    } else {
+        SearchError::Other(format!("{err}"))
+    }
+}
+
+fn block_detail(status: u16, cf_ray: Option<&str>, mitigated: Option<&str>) -> String {
+    let mut detail = format!("HTTP {status}");
+    if let Some(ray) = cf_ray {
+        detail.push_str(&format!(", cf-ray {ray}"));
+    }
+    if let Some(mitigated) = mitigated {
+        detail.push_str(&format!(", cf-mitigated {mitigated}"));
+    }
+    detail
+}
+
+/// Markers used by Cloudflare's block/challenge pages. Avoid matching the
+/// bare word "cloudflare" because normal pages can reference its scripts.
+fn is_block_body(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    [
+        "just a moment",
+        "cf-chl",
+        "attention required",
+        "access denied",
+        "error 1020",
+        "error 1015",
+        "error 1010",
+        "cf-mitigated",
+        "turnstile",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+// ---------------------------------------------------------------------------
+// Result cache: successful MotionBGS pages are reused for a while. This makes
+// category browsing instant, avoids hammering a Cloudflare-protected site and
+// means a temporary block does not empty an already loaded page.
+// ---------------------------------------------------------------------------
+
+const CACHE_VERSION: &str = "v1";
+const CACHE_TTL_MS: u128 = 20 * 60 * 1000;
+const MAX_CACHE_FILES: usize = 120;
+const MAX_MEMORY_ENTRIES: usize = 160;
+
+#[derive(Serialize, Deserialize)]
+struct CachedResults {
+    saved_ms: u128,
+    items: Vec<RemoteItem>,
+}
+
+static MEMORY_CACHE: OnceLock<Mutex<HashMap<String, (u128, Vec<RemoteItem>)>>> =
+    OnceLock::new();
+static CACHE_STORES: AtomicUsize = AtomicUsize::new(0);
+
+fn memory_cache() -> &'static Mutex<HashMap<String, (u128, Vec<RemoteItem>)>> {
+    MEMORY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remember(key: String, saved_ms: u128, items: Vec<RemoteItem>) {
+    let mut cache = memory_cache()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    cache.insert(key, (saved_ms, items));
+    while cache.len() > MAX_MEMORY_ENTRIES {
+        let Some(oldest) = cache
+            .iter()
+            .min_by_key(|(_, (saved, _))| *saved)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        cache.remove(&oldest);
+    }
+}
+
+fn cache_key(query: &str, page: u32, category: MotionBgsCategory) -> String {
+    let seed = format!(
+        "{CACHE_VERSION}|{}|{}|{}",
+        query.trim().to_lowercase(),
+        page.max(1),
+        category.id()
+    );
+    crate::util::cache_key_for_text(&seed)
+}
+
+fn cache_dir() -> PathBuf {
+    crate::util::cache_root().join("online")
+}
+
+fn cache_path(key: &str) -> PathBuf {
+    cache_dir().join(format!("motionbgs-{key}.json"))
+}
+
+fn load_cached(
+    query: &str,
+    page: u32,
+    category: MotionBgsCategory,
+) -> Option<Vec<RemoteItem>> {
+    let key = cache_key(query, page, category);
+    let now = crate::util::now_ms();
+
+    {
+        let mut cache = memory_cache()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if let Some((saved, items)) = cache.get(&key) {
+            if now.saturating_sub(*saved) <= CACHE_TTL_MS {
+                return Some(items.clone());
+            }
+            cache.remove(&key);
+        }
+    }
+
+    let path = cache_path(&key);
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let cached: CachedResults = serde_json::from_str(&raw).ok()?;
+    if now.saturating_sub(cached.saved_ms) > CACHE_TTL_MS {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+
+    remember(key, cached.saved_ms, cached.items.clone());
+    Some(cached.items)
+}
+
+fn store_cached(
+    query: &str,
+    page: u32,
+    category: MotionBgsCategory,
+    items: &[RemoteItem],
+) {
+    let key = cache_key(query, page, category);
+    let saved_ms = crate::util::now_ms();
+    remember(key.clone(), saved_ms, items.to_vec());
+
+    let dir = cache_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let entry = CachedResults {
+        saved_ms,
+        items: items.to_vec(),
+    };
+    let Ok(json) = serde_json::to_vec(&entry) else {
+        return;
+    };
+    let path = cache_path(&key);
+    let temp = path.with_extension("json.tmp");
+    if std::fs::write(&temp, json).is_ok() {
+        let _ = std::fs::remove_file(&path);
+        if std::fs::rename(&temp, &path).is_err() {
+            let _ = std::fs::remove_file(&temp);
+        }
+    }
+
+    if CACHE_STORES.fetch_add(1, Ordering::Relaxed) % 20 == 0 {
+        prune_cache(&dir);
+    }
+}
+
+/// Keeps the on-disk cache bounded. Runs only occasionally, on the same
+/// background search thread, so it never touches the UI thread.
+fn prune_cache(dir: &PathBuf) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = crate::util::now_ms();
+    let mut files: Vec<(PathBuf, u128)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("motionbgs-") || !name.ends_with(".json") {
+            continue;
+        }
+        let modified = crate::util::modified_ms(&path);
+        if now.saturating_sub(modified) > CACHE_TTL_MS * 6 {
+            let _ = std::fs::remove_file(&path);
+        } else {
+            files.push((path, modified));
+        }
+    }
+    if files.len() > MAX_CACHE_FILES {
+        files.sort_by_key(|(_, modified)| *modified);
+        let remove_count = files.len() - MAX_CACHE_FILES;
+        for (path, _) in files.into_iter().take(remove_count) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 pub fn build_url(query: &str, page: u32, category: MotionBgsCategory) -> String {
@@ -176,10 +456,13 @@ pub fn parse_html(html: &str) -> Vec<RemoteItem> {
             || block.contains(">4K")
             || filename.to_lowercase().contains("4k");
 
+        let thumb_url = format!("{BASE}/i/c/364x205/media/{id}/{filename}.jpg");
+        let thumb_key = crate::util::cache_key_for_text(&thumb_url);
         items.push(RemoteItem {
             id: id.clone(),
             title,
-            thumb_url: format!("{BASE}/i/c/364x205/media/{id}/{filename}.jpg"),
+            thumb_url,
+            thumb_key,
             full_url: if is_4k {
                 format!("{BASE}/dl/4k/{id}/")
             } else {
@@ -321,6 +604,24 @@ mod tests {
         );
         assert_eq!(MotionBgsCategory::from_id("4k"), Some(MotionBgsCategory::Ultra4k));
         assert_eq!(MotionBgsCategory::from_id("nope"), None);
+    }
+
+    #[test]
+    fn detects_cloudflare_block_pages() {
+        assert!(is_block_body("Just a moment..."));
+        assert!(is_block_body("<title>Access denied | motionbgs.com used Cloudflare</title>"));
+        assert!(is_block_body("Error 1020: Access denied"));
+        assert!(!is_block_body("<html><body><div class=tmb>normal catalog</div></body></html>"));
+    }
+
+    #[test]
+    fn cache_key_separates_queries_and_pages() {
+        let a = cache_key("gojo", 1, MotionBgsCategory::All);
+        let b = cache_key("gojo", 2, MotionBgsCategory::All);
+        let c = cache_key("naruto", 1, MotionBgsCategory::All);
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(a, cache_key(" GOJO ", 1, MotionBgsCategory::All));
     }
 
     #[test]

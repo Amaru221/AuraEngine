@@ -32,9 +32,23 @@ UI (egui)  ──►  WorkerW (capa del escritorio)  ──►  mpv --wid  ─�
 - **Biblioteca local** con miniaturas (mpv extrae el primer fotograma), búsqueda, filtros y favoritos.
 - **Catálogos online**: Wallhaven, Bing Daily, **MotionBGS** (live wallpapers 4K/1080p) y Pexels (clave opcional).
 - **Tema dinámico**: extrae el color dominante del fondo y adapta la interfaz; opcionalmente tiñe el acento de Windows (best-effort).
+- **Interfaz en español, inglés y francés**, seleccionable al instante en Ajustes → General.
 - **CLI completa** e **instancia única** mediante named pipe.
 - **Auto-descarga de mpv** portable desde GitHub si no está instalado.
-- **Rendimiento**: arranque/parada de mpv en segundo plano, detección de oclusión en un hilo aparte y miniaturas cacheadas (la UI nunca se bloquea).
+- **Rendimiento**: arranque/parada de mpv en segundo plano, detección de oclusión en un hilo aparte, filtros de biblioteca cacheados, miniaturas descargadas en paralelo y repintado adaptativo (la UI nunca se bloquea).
+
+---
+
+## Capturas de pantalla
+
+### Biblioteca
+![Biblioteca de Aura Engine](assets/screenshots/library.png)
+
+### Explorar
+![Catálogos online de Aura Engine](assets/screenshots/explore.png)
+
+### Ajustes
+![Ajustes e idioma de Aura Engine](assets/screenshots/settings.png)
 
 ---
 
@@ -69,13 +83,13 @@ El instalador crea el grupo **Aura Engine** en el menú Inicio (busca "Aura Engi
 Instalación silenciosa:
 
 ```powershell
-.\aura-v1.0.16-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+.\aura-v1.0.17-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ```
 
 ### Opción B — Portable
 
 ```powershell
-cd .\dist\aura-v1.0.16-windows-x64
+cd .\dist\aura-v1.0.17-windows-x64
 .\aura.exe
 ```
 
@@ -111,13 +125,17 @@ cargo build --release
 .\scripts\build-installer.ps1 -Sign  # instalador Inno Setup
 ```
 
-Genera `dist\aura-v1.0.16-windows-x64.zip` y `dist\aura-v1.0.16-windows-x64-setup.exe`.
+Genera `dist\aura-v1.0.17-windows-x64.zip` y `dist\aura-v1.0.17-windows-x64-setup.exe`.
 El instalador necesita [Inno Setup 6](https://jrsoftware.org/isinfo.php)
 (`winget install --id JRSoftware.InnoSetup -e`).
 
 ---
 
 ## Uso
+
+### Idioma
+
+Cambia el idioma en **Ajustes → General → Idioma**: español, inglés o francés. La interfaz, la bandeja del sistema y los textos de estado se actualizan al instante y la elección se guarda en `config.json`.
 
 ### Bandeja del sistema
 
@@ -228,6 +246,7 @@ La búsqueda por texto es global; al escribir una búsqueda se vuelve a la categ
 | `%APPDATA%\Aura\config.json` | Configuración y asignaciones por monitor |
 | `%LOCALAPPDATA%\Aura\bin\mpv.exe` | mpv portable descargado |
 | `%LOCALAPPDATA%\Aura\cache\thumbs` | Miniaturas |
+| `%LOCALAPPDATA%\Aura\cache\online` | Resultados de MotionBGS en caché (20 min) |
 | `%LOCALAPPDATA%\Aura\wallpapers\online` | Descargas de los catálogos |
 | `%LOCALAPPDATA%\Aura\logs` | `aura.log` y logs de mpv |
 
@@ -246,8 +265,11 @@ Ajustes → Motor: comprueba que mpv está detectado. Usa *Descargar mpv* o indi
 **El fondo se pausa constantemente**
 Desactiva *Pausar cuando el escritorio está tapado* o *Pausar en juegos a pantalla completa* en Ajustes → Rendimiento.
 
+**MotionBGS bloquea la búsqueda**
+MotionBGS está detrás de Cloudflare y puede bloquear una IP completa. Si la web tampoco abre en el navegador, Aura mostrará un aviso específico: necesitas una VPN o un proxy con otra IP. No se reintenta automáticamente para no empeorar el bloqueo. Los resultados ya cargados se guardan en caché durante 20 minutos; **Actualizar** y **Reintentar** sí consultan el sitio de nuevo.
+
 **La UI va lenta**
-La versión 1.0.4+ evita el trabajo pesado por frame (versión de mpv cacheada, miniaturas con clave cacheada, sin clonar la biblioteca completa). Si persiste, revisa el consumo con:
+Aura evita el trabajo pesado por frame: la versión de mpv se consulta una sola vez, las miniaturas usan claves cacheadas y un límite de memoria, el filtro de la biblioteca solo se recalcula cuando cambia la búsqueda y **Explorar** descarga sus catálogos la primera vez que entras (no al arrancar). Si persiste, revisa el consumo con:
 
 ```powershell
 $p = Get-Process aura | Select-Object -First 1

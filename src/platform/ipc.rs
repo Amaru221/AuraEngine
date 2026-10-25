@@ -103,7 +103,10 @@ fn open_pipe() -> Option<windows::Win32::Foundation::HANDLE> {
 
 /// Sends a command to the running instance. Returns false when none is up.
 pub fn send(command: &str) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    // A normal launch used to spend three seconds probing for another
+    // instance before showing anything. Half a second is enough to catch a
+    // simultaneous second launch and keeps startup snappy.
+    let deadline = Instant::now() + Duration::from_millis(500);
     loop {
         if let Some(handle) = open_pipe() {
             let mut written = 0u32;

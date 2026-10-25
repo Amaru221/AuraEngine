@@ -48,7 +48,7 @@ pub fn main_ui(app: &mut AuraApp, ctx: &egui::Context) {
         });
 
     toast(app, ctx);
-    drop_overlay(ctx);
+    drop_overlay(app, ctx);
     window_border(ctx);
     resize_grip(ctx);
 }
@@ -290,7 +290,11 @@ fn sidebar(app: &mut AuraApp, ui: &mut egui::Ui) {
         // Status pill
         let running = app.engine.running_count();
         let (label, color, reason) = if running > 0 && app.engine.is_paused() {
-            (app.strings.paused, Color32::from_rgb(240, 190, 90), Some(app.engine.env().describe()))
+            (
+                app.strings.paused,
+                Color32::from_rgb(240, 190, 90),
+                Some(app.pause_reason()),
+            )
         } else if running > 0 {
             (app.strings.playing, Color32::from_rgb(96, 210, 150), None)
         } else {
@@ -503,7 +507,7 @@ fn toast(app: &mut AuraApp, ctx: &egui::Context) {
         });
 }
 
-fn drop_overlay(ctx: &egui::Context) {
+fn drop_overlay(app: &AuraApp, ctx: &egui::Context) {
     let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
     if !hovering {
         return;
@@ -523,7 +527,7 @@ fn drop_overlay(ctx: &egui::Context) {
     painter.text(
         screen.center(),
         Align2::CENTER_CENTER,
-        "Drop to apply",
+        app.strings.drop_to_apply,
         FontId::proportional(24.0),
         Color32::WHITE,
     );

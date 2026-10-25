@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use windows::core::{w, BOOL, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, TRUE};
+use windows::Win32::Foundation::{
+    GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, POINT, RECT, TRUE,
+};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, DISPLAY_DEVICEW,
@@ -111,6 +113,15 @@ impl MonitorInfo {
     }
 }
 
+static PRIMARY_INSTANCE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// True when this process created the single-instance mutex. A second launch
+/// can skip the pipe probe entirely and forward its command immediately.
+pub fn is_primary_instance() -> bool {
+    PRIMARY_INSTANCE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn init_process() {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -120,10 +131,16 @@ pub fn init_process() {
         // Named mutex that lets the installer detect a running instance
         // before upgrading or uninstalling. The handle is intentionally kept
         // for the whole process lifetime.
-        let _ = windows::Win32::System::Threading::CreateMutexW(
+        let created = windows::Win32::System::Threading::CreateMutexW(
             None,
             false,
             w!("AuraEngine.SingleInstance"),
+        )
+        .is_ok();
+        let already_running = GetLastError() == ERROR_ALREADY_EXISTS;
+        PRIMARY_INSTANCE.store(
+            created && !already_running,
+            std::sync::atomic::Ordering::Relaxed,
         );
     }
 }
@@ -252,7 +269,14 @@ pub fn on_battery() -> bool {
     has_battery && status.ACLineStatus == 0
 }
 
+#[allow(dead_code)]
 pub fn is_fullscreen_app() -> bool {
+    let monitors = monitors();
+    is_fullscreen_app_on(&monitors)
+}
+
+/// Same as [`is_fullscreen_app`], reusing an existing monitor snapshot.
+pub fn is_fullscreen_app_on(monitors: &[MonitorInfo]) -> bool {
     unsafe {
         let state = SHQueryUserNotificationState().unwrap_or(QUNS_NOT_PRESENT);
         if state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_BUSY {
@@ -276,9 +300,9 @@ pub fn is_fullscreen_app() -> bool {
             return false;
         }
         let rect = RectI::from_rect(rect);
-        monitors().iter().any(|m| {
-            rect.intersects(&m.rect) as f64 >= (m.rect.area() as f64) * 0.995
-        })
+        monitors
+            .iter()
+            .any(|m| rect.intersects(&m.rect) as f64 >= (m.rect.area() as f64) * 0.995)
     }
 }
 
@@ -310,7 +334,7 @@ fn window_class(hwnd: HWND) -> String {
 }
 
 struct OcclusionCtx {
-    target: RectI,
+    targets: Vec<RectI>,
     own_pid: u32,
     occluded: bool,
 }
@@ -350,22 +374,30 @@ unsafe extern "system" fn occlusion_proc(hwnd: HWND, data: LPARAM) -> BOOL {
         if rect.is_empty() {
             return TRUE;
         }
-        let covered = rect.intersects(&ctx.target);
-        if covered as f64 >= (ctx.target.area() as f64) * 0.90 {
-            ctx.occluded = true;
-            return BOOL(0);
+        for target in &ctx.targets {
+            let covered = rect.intersects(target);
+            if covered as f64 >= (target.area() as f64) * 0.90 {
+                ctx.occluded = true;
+                return BOOL(0);
+            }
         }
     }
     TRUE
 }
 
-/// True when a normal application window covers most of `target`.
-pub fn is_occluded(target: RectI) -> bool {
-    if target.is_empty() {
+/// True when a normal application window covers most of any monitor. All
+/// targets are checked in a single `EnumWindows` pass.
+pub fn any_occluded(monitors: &[MonitorInfo]) -> bool {
+    let targets: Vec<RectI> = monitors
+        .iter()
+        .map(|monitor| monitor.rect)
+        .filter(|rect| !rect.is_empty())
+        .collect();
+    if targets.is_empty() {
         return false;
     }
     let mut ctx = OcclusionCtx {
-        target,
+        targets,
         own_pid: std::process::id(),
         occluded: false,
     };

@@ -4,9 +4,9 @@ use eframe::egui;
 use egui::{Align, Color32, Layout, RichText, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::app::AuraApp;
-use crate::online::{MotionBgsCategory, Provider};
+use crate::online::{MotionBgsCategory, Provider, SearchError};
 use crate::theme;
-use crate::ui::library::{cover_uv, truncate, CardInfo};
+use crate::ui::library::{cover_uv, truncate};
 use crate::ui::page_header;
 
 const CARD_W: f32 = 236.0;
@@ -49,16 +49,106 @@ impl AuraApp {
             return;
         }
 
-        if let Some(error) = &self.remote_error {
+        let mut retry = false;
+        let mut open_site = false;
+        if let Some(error) = self.remote_error.clone() {
+            let is_motionbgs = self.remote_provider == Provider::MotionBgs;
+            // Network details are often raw OS messages; only show the useful
+            // technical data for blocks (HTTP/CF-Ray) and unexpected errors.
+            let detail = match &error {
+                SearchError::Blocked { .. } | SearchError::Other(_) => {
+                    error.detail().map(str::to_owned)
+                }
+                _ => None,
+            };
+            let (title, hint, show_vpn) = match &error {
+                SearchError::Blocked { .. } => (
+                    self.strings.motionbgs_blocked_title,
+                    self.strings.motionbgs_blocked_hint,
+                    true,
+                ),
+                SearchError::RateLimited { .. } => (
+                    self.strings.motionbgs_rate_title,
+                    self.strings.motionbgs_rate_hint,
+                    false,
+                ),
+                SearchError::Offline(_) => (
+                    self.strings.connection_error_title,
+                    self.strings.connection_error_hint,
+                    false,
+                ),
+                SearchError::Empty(_) => (
+                    self.strings.no_results,
+                    self.strings.no_results_hint,
+                    false,
+                ),
+                SearchError::Other(_) => (
+                    self.strings.catalog_error_title,
+                    self.strings.catalog_error_hint,
+                    false,
+                ),
+            };
+
             egui::Frame::NONE
                 .fill(theme::card())
                 .stroke(Stroke::new(1.0_f32, theme::danger().gamma_multiply(0.6)))
                 .corner_radius(10)
-                .inner_margin(egui::Margin::same(14))
+                .inner_margin(egui::Margin::same(16))
                 .show(ui, |ui| {
-                    ui.label(RichText::new(error).size(12.0).color(theme::text()));
+                    ui.set_width(ui.available_width());
+                    ui.label(
+                        RichText::new(title)
+                            .size(14.0)
+                            .strong()
+                            .color(theme::text()),
+                    );
+                    ui.add_space(3.0);
+                    ui.label(RichText::new(hint).size(11.5).color(theme::muted()));
+                    if show_vpn {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(self.strings.use_vpn_hint)
+                                .size(11.5)
+                                .strong()
+                                .color(Color32::from_rgb(240, 190, 90)),
+                        );
+                    }
+                    if let Some(detail) = &detail {
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(detail)
+                                .size(9.5)
+                                .color(theme::muted()),
+                        );
+                    }
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(self.strings.retry).clicked() {
+                            retry = true;
+                        }
+                        if is_motionbgs
+                            && ui.button(self.strings.open_in_browser).clicked()
+                        {
+                            open_site = true;
+                        }
+                    });
                 });
             ui.add_space(10.0);
+        }
+
+        if retry {
+            self.retry_online();
+        }
+        if open_site {
+            let url = crate::online::motionbgs_page_url(
+                &self.remote_query,
+                self.remote_page,
+                self.motionbgs_category,
+            );
+            crate::util::open_url(&url);
+        }
+        if self.remote_error.is_some() && self.remote.is_empty() {
+            return;
         }
 
         if self.remote_loading && self.remote.is_empty() {
@@ -83,7 +173,10 @@ impl AuraApp {
             return;
         }
 
-        let remote_len = self.remote.len();
+        // Arc snapshot: cards borrow the items instead of cloning seven
+        // strings per visible card on every frame.
+        let remote = self.remote.clone();
+        let remote_len = remote.len();
         let available = ui.available_width();
         let columns = (((available + GAP) / (CARD_W + GAP)).floor() as usize).max(1);
         let row_height = CARD_H + CARD_TEXT_H + GAP;
@@ -101,9 +194,7 @@ impl AuraApp {
                             if index >= remote_len {
                                 break;
                             }
-                            // Clone only visible cards.
-                            let item = self.remote[index].clone();
-                            self.remote_card(ui, &item);
+                            self.remote_card(ui, &remote[index]);
                         }
                     });
                 }
@@ -115,7 +206,9 @@ impl AuraApp {
                 if self.remote_loading {
                     ui.spinner();
                     ui.label(RichText::new(self.strings.loading).size(12.0).color(theme::muted()));
-                } else if ui.button(self.strings.load_more).clicked() {
+                } else if self.remote_error.is_none()
+                    && ui.button(self.strings.load_more).clicked()
+                {
                     self.remote_page = self.remote_page.saturating_add(1);
                     self.search_online(false);
                 }
@@ -206,7 +299,7 @@ impl AuraApp {
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.button(self.strings.refresh).clicked() {
-                    self.search_online(true);
+                    self.refresh_online();
                 }
             });
         });
@@ -268,17 +361,6 @@ impl AuraApp {
         let (rect, _) =
             ui.allocate_exact_size(Vec2::new(CARD_W, CARD_H + CARD_TEXT_H), Sense::hover());
 
-        let info = CardInfo {
-            name: &item.title,
-            folder: Some(&item.resolution),
-            kind: item.kind,
-            kind_label: item.kind.label(),
-            thumb_key: &key,
-            favorite: false,
-            applied: false,
-            accent: self.accent,
-        };
-
         // Paint the card manually so we can overlay the download state.
         let response = ui.interact(
             rect,
@@ -291,7 +373,7 @@ impl AuraApp {
             rect.min + Vec2::splat(1.0),
             Vec2::new(rect.width() - 2.0, CARD_H - 2.0),
         );
-        if let Some(entry) = self.thumbs.get(&key) {
+        if let Some(entry) = self.thumbs.get(key) {
             let uv = cover_uv(entry.aspect, image_rect);
             painter.image(entry.texture.id(), image_rect, uv, Color32::WHITE);
         } else {
@@ -337,7 +419,11 @@ impl AuraApp {
         painter.text(
             egui::pos2(rect.left() + 2.0, image_rect.bottom() + 26.0),
             egui::Align2::LEFT_TOP,
-            format!("{}  {}", item.resolution, item.kind.label()),
+            format!(
+                "{}  {}",
+                item.resolution,
+                crate::i18n::kind_label(item.kind, self.strings)
+            ),
             egui::FontId::proportional(10.0),
             theme::muted(),
         );
@@ -368,23 +454,20 @@ impl AuraApp {
             self.download_remote(item.clone(), true);
         }
 
-        let page = item.page_url.clone();
-        let item_clone = item.clone();
         response.context_menu(|ui| {
+            // Clone only when a menu entry is used, not once per frame.
             if ui.button(self.strings.download_apply).clicked() {
-                self.download_remote(item_clone.clone(), true);
+                self.download_remote(item.clone(), true);
                 ui.close_menu();
             }
             if ui.button(self.strings.download_only).clicked() {
-                self.download_remote(item_clone.clone(), false);
+                self.download_remote(item.clone(), false);
                 ui.close_menu();
             }
             if ui.button(self.strings.reveal).clicked() {
-                crate::util::open_url(&page);
+                crate::util::open_url(&item.page_url);
                 ui.close_menu();
             }
         });
-
-        let _ = info;
     }
 }

@@ -96,18 +96,22 @@ impl AuraApp {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(theme::icon(theme::ICON_SEARCH).color(theme::muted()));
-                        ui.add(
+                        let response = ui.add(
                             egui::TextEdit::singleline(&mut self.query)
                                 .hint_text(self.strings.search)
                                 .desired_width(220.0)
                                 .frame(false),
                         );
+                        if response.changed() {
+                            self.invalidate_filter();
+                        }
                         if !self.query.is_empty()
                             && ui
                                 .add(egui::Button::new(theme::icon(theme::ICON_CLOSE)).frame(false))
                                 .clicked()
                         {
                             self.query.clear();
+                            self.invalidate_filter();
                         }
                     });
                 });
@@ -190,10 +194,11 @@ impl AuraApp {
                 Some(item.folder.as_str())
             },
             kind: item.kind,
-            kind_label: item.kind.label(),
+            kind_label: crate::i18n::kind_label(item.kind, self.strings),
             thumb_key: &thumb_key,
-            favorite: self.cfg.is_favorite(&item.path),
+            favorite: self.favorites.contains(&item.path),
             applied,
+            applied_label: self.strings.applied_badge,
             accent: self.accent,
         };
         let response = draw_card(ui, rect, &self.thumbs, &info)
@@ -209,22 +214,27 @@ impl AuraApp {
             reveal_path(&item.path);
         }
 
-        let path = item.path.clone();
-        let monitors = self.monitors.clone();
         response.context_menu(|ui| {
+            // Cloned when the menu is actually open, not on every frame.
+            let path = item.path.clone();
             if ui.button(self.strings.apply).clicked() {
                 self.apply_media(&path, None);
                 ui.close_menu();
             }
-            let favorite = self.cfg.is_favorite(&path);
+            let favorite = self.favorites.contains(&path);
             let label = if favorite {
                 self.strings.unfavorite
             } else {
                 self.strings.favorite
             };
             if ui.button(label).clicked() {
-                self.cfg.toggle_favorite(&path);
-                self.mark_dirty();
+                self.toggle_favorite(&path);
+                let toast = if favorite {
+                    self.strings.toast_favorite_removed
+                } else {
+                    self.strings.toast_favorite_added
+                };
+                self.info(toast);
                 ui.close_menu();
             }
             if ui.button(self.strings.reveal).clicked() {
@@ -233,6 +243,7 @@ impl AuraApp {
             }
             ui.separator();
             ui.menu_button(self.strings.all_monitors, |ui| {
+                let monitors = self.monitors.clone();
                 for monitor in &monitors {
                     let label = self.monitor_menu_label(monitor);
                     if ui.button(label).clicked() {
@@ -253,6 +264,7 @@ pub struct CardInfo<'a> {
     pub thumb_key: &'a str,
     pub favorite: bool,
     pub applied: bool,
+    pub applied_label: &'a str,
     pub accent: Color32,
 }
 
@@ -348,7 +360,7 @@ pub fn draw_card(
         painter.text(
             applied_rect.center(),
             Align2::CENTER_CENTER,
-            "APPLIED",
+            info.applied_label,
             FontId::proportional(8.5),
             theme::contrast_on(info.accent),
         );
@@ -454,6 +466,7 @@ fn filter_chip(ui: &mut egui::Ui, app: &mut AuraApp, filter: Filter, label: &str
         .min_size(Vec2::new(0.0, 26.0));
     if ui.add(button).clicked() {
         app.filter = filter;
+        app.invalidate_filter();
     }
 }
 

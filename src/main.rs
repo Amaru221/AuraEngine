@@ -31,13 +31,19 @@ fn main() {
         .any(|a| a == "--hidden" || a == "--autostart");
     let action = cli::extract_action(&args);
 
-    // A second launch forwards its command to the running instance.
+    // A second launch forwards its command to the running instance. The
+    // single-instance mutex makes the common "first launch" path skip the
+    // pipe probe completely instead of waiting before showing the window.
     let command = action.clone().unwrap_or_else(|| "show".to_string());
-    if platform::ipc::send(&command) {
+    if platform::win::is_primary_instance() {
+        platform::ipc::start_server();
+    } else if platform::ipc::send(&command) {
         return;
+    } else {
+        // The previous instance disappeared between the mutex check and the
+        // pipe connection; become the server ourselves.
+        platform::ipc::start_server();
     }
-
-    platform::ipc::start_server();
 
     if let Err(err) = app::run(hidden, action) {
         log::error!("fatal: {err:#}");

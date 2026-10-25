@@ -101,6 +101,7 @@ pub fn run(args: &[String]) {
                 1,
                 "",
                 category,
+                false,
             ) {
                 Ok(items) => {
                     util::console_out(&format!("{} results", items.len()));
@@ -128,6 +129,7 @@ pub fn run(args: &[String]) {
                 1,
                 "",
                 category,
+                false,
             ) {
                 Ok(items) => {
                     if let Some(item) = items.first() {
