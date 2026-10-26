@@ -584,11 +584,6 @@ impl AuraApp {
             .any(|assignment| assignment.path.as_path() == path)
     }
 
-    /// Local file a remote catalog item would occupy after downloading.
-    pub fn remote_local_path(&self, item: &RemoteItem) -> PathBuf {
-        util::online_dir().join(item.local_filename())
-    }
-
     pub fn toggle_favorite(&mut self, path: &Path) {
         self.cfg.toggle_favorite(path);
         if self.favorites.contains(path) {

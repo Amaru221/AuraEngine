@@ -473,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn download_and_ui_share_the_local_filename() {
+    fn download_uses_a_deterministic_local_filename() {
         let item = RemoteItem {
             id: "abc123".into(),
             title: "My Wallpaper".into(),

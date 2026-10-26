@@ -1,11 +1,11 @@
-Aura Engine v1.0.19
+Aura Engine v1.1.0
 Copyright (C) 2026 Amaru221 and contributors
 
 License: GNU General Public License, version 3 or later (GPL-3.0-or-later).
 See LICENSE for the full license text and NOTICE for attribution.
 
 Corresponding source code for this release:
-https://github.com/Amaru221/AuraEngine/tree/v1.0.19
+https://github.com/Amaru221/AuraEngine/tree/v1.1.0
 
 Third-party license texts:
 THIRD_PARTY_LICENSES.txt

@@ -6,7 +6,7 @@ use egui::{Align, Color32, Layout, RichText, Sense, Stroke, StrokeKind, Vec2};
 use crate::app::AuraApp;
 use crate::online::{MotionBgsCategory, Provider, SearchError};
 use crate::theme;
-use crate::ui::library::{cover_uv, draw_display_badges, truncate};
+use crate::ui::library::{cover_uv, truncate};
 use crate::ui::page_header;
 
 const CARD_W: f32 = 236.0;
@@ -357,11 +357,6 @@ impl AuraApp {
         self.request_remote_thumb(item);
         let key = item.thumb_key();
         let downloading = self.downloading.contains(&item.id);
-        // A remote item that was already downloaded and applied has a local
-        // file with a deterministic name; reuse the per-monitor detection.
-        let local_path = self.remote_local_path(item);
-        let displays = self.applied_display_numbers(&local_path);
-        let applied = !displays.is_empty();
 
         let (rect, _) =
             ui.allocate_exact_size(Vec2::new(CARD_W, CARD_H + CARD_TEXT_H), Sense::hover());
@@ -414,10 +409,6 @@ impl AuraApp {
             Color32::from_white_alpha(220),
         );
 
-        if !displays.is_empty() {
-            draw_display_badges(painter, image_rect, &displays, self.accent);
-        }
-
         painter.text(
             egui::pos2(rect.left() + 2.0, image_rect.bottom() + 8.0),
             egui::Align2::LEFT_TOP,
@@ -437,11 +428,11 @@ impl AuraApp {
             theme::muted(),
         );
 
-        if applied || response.hovered() {
+        if response.hovered() {
             painter.rect_stroke(
                 rect,
                 12,
-                Stroke::new(if applied { 1.6 } else { 1.0_f32 }, self.accent),
+                Stroke::new(1.0_f32, self.accent),
                 StrokeKind::Inside,
             );
         }

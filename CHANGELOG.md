@@ -2,6 +2,16 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [1.1.0] - 2026-10-26
+
+### Changed
+
+- Per-display applied badges are now shown **only in Library**. Explore cards
+  return to their discovery-focused layout: they no longer probe local
+  assignments or draw applied-state overlays and accent borders.
+- The downloader keeps using the deterministic local filename helper, so
+  catalog downloads continue to be stored and reused predictably.
+
 ## [1.0.19] - 2026-10-26
 
 ### Added

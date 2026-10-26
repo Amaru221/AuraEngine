@@ -29,7 +29,7 @@ UI (egui)  ──►  WorkerW (capa del escritorio)  ──►  mpv --wid  ─�
 - **Ventana translúcida** con barra de título propia y opacidad independiente para el contenedor, la barra lateral y la barra de título, con modo vinculado.
 - **Esquinas redondeadas** y cierre completo desde la bandeja (con watchdog si el apagado se bloquea).
 - **Atajos globales** (Ctrl+Alt+…).
-- **Biblioteca local** con miniaturas (mpv extrae el primer fotograma), búsqueda, filtros y favoritos. Las tarjetas de **Biblioteca** y **Explorar** indican con badges `1`, `2`… en qué pantalla está aplicado cada fondo, incluyendo el caso de una misma imagen en varias pantallas.
+- **Biblioteca local** con miniaturas (mpv extrae el primer fotograma), búsqueda, filtros y favoritos. Las tarjetas de **Biblioteca** indican con badges `1`, `2`… en qué pantalla está aplicado cada fondo, incluyendo el caso de una misma imagen en varias pantallas.
 - **Arranque sin parpadeo**: la ventana se crea invisible, se limpia con el fondo opaco del tema y solo se muestra después de presentar los primeros frames, evitando el destello blanco del marco.
 - **Catálogos online**: Wallhaven, Bing Daily, **MotionBGS** (live wallpapers 4K/1080p) y Pexels (clave opcional).
 - **Tema dinámico**: extrae el color dominante del fondo y adapta la interfaz; opcionalmente tiñe el acento de Windows (best-effort).
@@ -84,13 +84,13 @@ El instalador crea el grupo **Aura Engine** en el menú Inicio (busca "Aura Engi
 Instalación silenciosa:
 
 ```powershell
-.\aura-v1.0.19-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+.\aura-v1.1.0-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ```
 
 ### Opción B — Portable
 
 ```powershell
-cd .\dist\aura-v1.0.19-windows-x64
+cd .\dist\aura-v1.1.0-windows-x64
 .\aura.exe
 ```
 
@@ -126,7 +126,7 @@ cargo build --release
 .\scripts\build-installer.ps1 -Sign  # instalador Inno Setup
 ```
 
-Genera `dist\aura-v1.0.19-windows-x64.zip` y `dist\aura-v1.0.19-windows-x64-setup.exe`.
+Genera `dist\aura-v1.1.0-windows-x64.zip` y `dist\aura-v1.1.0-windows-x64-setup.exe`.
 El instalador necesita [Inno Setup 6](https://jrsoftware.org/isinfo.php)
 (`winget install --id JRSoftware.InnoSetup -e`).
 
