@@ -2,6 +2,32 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [1.0.19] - 2026-10-26
+
+### Added
+
+- Per-display applied badges in the **Library** and **Explore** cards. Each
+  card now shows the Windows display number (`1`, `2`, …) where that image or
+  video is currently assigned, including the same wallpaper on several
+  displays. Detection uses the real per-monitor assignments instead of the
+  single global `last_applied` value.
+- Explore locates already-downloaded catalog items with the same deterministic
+  filename used by the downloader, so their badges survive navigation.
+
+### Fixed
+
+- White flash while opening the app. A timer forced the window visible after
+  300 ms even when the first OpenGL frame had not been presented yet. The
+  window is now revealed only after two painted frames, the first frame is
+  cleared with the opaque theme background, the default white window-class
+  brush is removed and DWM dark rendering is requested.
+
+### Changed
+
+- Repository `.gitignore` now excludes local agent/editor tooling, build and
+  packaging artifacts, logs, temporary files, secrets and OS noise, keeping
+  version control focused on the application source and release metadata.
+
 ## [1.0.18] - 2026-10-26
 
 ### Fixed
