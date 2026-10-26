@@ -7,7 +7,10 @@ use windows::core::{w, BOOL, PCWSTR};
 use windows::Win32::Foundation::{
     GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, POINT, RECT, TRUE,
 };
-use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+use windows::Win32::Graphics::Dwm::{
+    DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAKED,
+    DWMWA_USE_IMMERSIVE_DARK_MODE,
+};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, DISPLAY_DEVICEW,
     HDC, HMONITOR, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
@@ -25,11 +28,11 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
     GetWindowLongPtrW, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, IsIconic,
-    FlashWindowEx, IsWindowVisible, SendMessageTimeoutW, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, FLASHWINFO, FLASHW_ALL, GWL_EXSTYLE, HWND_BROADCAST, HWND_TOP, SMTO_ABORTIFHUNG,
-    SM_CXVIRTUALSCREEN,
-    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOZORDER, SWP_SHOWWINDOW, SW_SHOWNORMAL, WM_SETTINGCHANGE, WS_EX_TOOLWINDOW,
+    FlashWindowEx, IsWindowVisible, SendMessageTimeoutW, SetClassLongPtrW, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, FLASHWINFO, FLASHW_ALL, GCLP_HBRBACKGROUND, GWL_EXSTYLE,
+    HWND_BROADCAST, HWND_TOP, SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER,
+    SWP_SHOWWINDOW, SW_SHOWNORMAL, WM_SETTINGCHANGE, WS_EX_TOOLWINDOW,
 };
 
 use crate::util;
@@ -79,6 +82,14 @@ impl RectI {
     }
 }
 
+/// Parses the Windows display number from a monitor device name
+/// (`\\.\DISPLAY2` -> `2`).
+pub fn display_number(key: &str) -> Option<u32> {
+    let upper = key.to_ascii_uppercase();
+    let (_, digits) = upper.rsplit_once("DISPLAY")?;
+    digits.parse().ok()
+}
+
 #[derive(Clone, Debug)]
 pub struct MonitorInfo {
     /// Device name, e.g. `\\.\DISPLAY1`.
@@ -99,9 +110,7 @@ impl MonitorInfo {
     /// Windows display number (1 for `\\.\DISPLAY1`), matching the numbers
     /// shown by Windows Settings -> Display -> Identify.
     pub fn number(&self) -> Option<u32> {
-        let upper = self.key.to_ascii_uppercase();
-        let (_, digits) = upper.rsplit_once("DISPLAY")?;
-        digits.parse().ok()
+        display_number(&self.key)
     }
 
     pub fn label(&self) -> String {
@@ -555,6 +564,25 @@ pub fn open_logs_folder() {
     util::open_path(&util::logs_dir());
 }
 
+/// Removes the default window-class background brush and asks DWM for dark
+/// non-client rendering.
+///
+/// A freshly created borderless/transparent window can otherwise let Windows
+/// paint its white default client background before the first OpenGL frame is
+/// presented, which shows up as a white flash while Aura starts.
+pub fn prepare_window(hwnd: HWND) {
+    unsafe {
+        let _ = SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
+        let dark = BOOL(1);
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &dark as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<BOOL>() as u32,
+        );
+    }
+}
+
 /// Clips the borderless main window to rounded corners. The region is in
 /// window coordinates, so it is refreshed when the window is resized or
 /// maximized. Maximized windows stay square.
@@ -620,5 +648,7 @@ mod tests {
         assert_eq!(monitor(r"\\.\DISPLAY2").number(), Some(2));
         assert_eq!(monitor(r"\\.\DISPLAY12").number(), Some(12));
         assert_eq!(monitor("custom").number(), None);
+        assert_eq!(super::display_number(r"\\.\display3"), Some(3));
+        assert_eq!(super::display_number("*"), None);
     }
 }

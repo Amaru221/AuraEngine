@@ -62,6 +62,22 @@ impl RemoteItem {
     pub fn thumb_key(&self) -> &str {
         &self.thumb_key
     }
+
+    /// Filename used inside the local online library once this item has been
+    /// downloaded. `download` and the applied-badge detection share it, so the
+    /// UI can locate an already-applied remote item without extra state.
+    pub fn local_filename(&self) -> String {
+        let ext = extension_from_url(&self.full_url).unwrap_or_else(|| match self.kind {
+            MediaKind::Video => "mp4".into(),
+            MediaKind::Image => "jpg".into(),
+        });
+        format!(
+            "{}-{}.{}",
+            util::sanitize_filename(&self.title),
+            &self.id.chars().take(24).collect::<String>(),
+            ext
+        )
+    }
 }
 
 /// Typed catalog failure. The UI uses this to tell an IP/Cloudflare block
@@ -379,17 +395,7 @@ fn pexels(query: &str, page: u32, api_key: &str) -> Result<Vec<RemoteItem>> {
 /// Downloads a remote item into the Aura online library.
 pub fn download(item: &RemoteItem, dest_dir: &Path, progress: Option<&dyn Fn(u64, u64)>) -> Result<PathBuf> {
     std::fs::create_dir_all(dest_dir).ok();
-    let ext = extension_from_url(&item.full_url).unwrap_or_else(|| match item.kind {
-        MediaKind::Video => "mp4".into(),
-        MediaKind::Image => "jpg".into(),
-    });
-    let filename = format!(
-        "{}-{}.{}",
-        util::sanitize_filename(&item.title),
-        &item.id.chars().take(24).collect::<String>(),
-        ext
-    );
-    let target = dest_dir.join(filename);
+    let target = dest_dir.join(item.local_filename());
     if target.is_file() && std::fs::metadata(&target).map(|m| m.len() > 0).unwrap_or(false) {
         return Ok(target);
     }
@@ -464,6 +470,22 @@ mod tests {
             Some("jpg".into())
         );
         assert_eq!(extension_from_url("https://x/y"), None);
+    }
+
+    #[test]
+    fn download_and_ui_share_the_local_filename() {
+        let item = RemoteItem {
+            id: "abc123".into(),
+            title: "My Wallpaper".into(),
+            thumb_url: String::new(),
+            thumb_key: String::new(),
+            full_url: "https://x/y/clip.webm?sig=1".into(),
+            page_url: String::new(),
+            kind: MediaKind::Video,
+            source: "Test".into(),
+            resolution: String::new(),
+        };
+        assert_eq!(item.local_filename(), "My Wallpaper-abc123.webm");
     }
 }
 

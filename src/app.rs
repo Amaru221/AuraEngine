@@ -1,6 +1,6 @@
 ﻿//! Application state, orchestration and event handling.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
@@ -175,9 +175,13 @@ pub struct AuraApp {
     pub hidden_lost_foreground: bool,
     pub quitting: bool,
     pub startup_done: bool,
-    /// The window is created hidden and revealed after the first painted
-    /// frame, which removes the white/transparent flash on startup.
+    /// The window is created hidden and revealed only after a couple of painted
+    /// frames, which removes the white/transparent flash on startup.
     pub revealed: bool,
+    /// Frames painted while the window is still hidden. The viewport command
+    /// is applied after `swap_buffers`, so the first visible frame is already
+    /// fully themed.
+    startup_frames: u8,
     pub initial_action: Option<String>,
     pub main_hwnd: Option<isize>,
     pub parked: Option<bool>,
@@ -230,6 +234,34 @@ fn pause_flags(cfg: &Config) -> u8 {
         flags |= PAUSE_BATTERY;
     }
     flags
+}
+
+/// Windows display numbers where `path` is assigned. Wildcard assignments
+/// (`*`) expand to every detected monitor, and a key whose monitor is
+/// disconnected still contributes its parsed display number.
+fn assigned_display_numbers(
+    assignments: &BTreeMap<String, Assignment>,
+    monitors: &[win::MonitorInfo],
+    path: &Path,
+) -> Vec<u32> {
+    let mut numbers = Vec::new();
+    for (key, assignment) in assignments {
+        if assignment.path.as_path() != path {
+            continue;
+        }
+        if key == "*" {
+            numbers.extend(monitors.iter().filter_map(|monitor| monitor.number()));
+        } else if let Some(monitor) = monitors.iter().find(|monitor| &monitor.key == key) {
+            if let Some(number) = monitor.number() {
+                numbers.push(number);
+            }
+        } else if let Some(number) = win::display_number(key) {
+            numbers.push(number);
+        }
+    }
+    numbers.sort_unstable();
+    numbers.dedup();
+    numbers
 }
 
 impl AuraApp {
@@ -394,6 +426,7 @@ impl AuraApp {
             quitting: false,
             startup_done: false,
             revealed: false,
+            startup_frames: 0,
             initial_action,
             main_hwnd: None,
             parked: None,
@@ -423,19 +456,10 @@ impl AuraApp {
             })
             .ok();
 
-        if !hidden {
-            // Safety net if the platform does not deliver a first redraw while
-            // the window is still invisible.
-            let reveal_ctx = cc.egui_ctx.clone();
-            std::thread::Builder::new()
-                .name("aura-reveal".into())
-                .spawn(move || {
-                    std::thread::sleep(Duration::from_millis(300));
-                    reveal_ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    reveal_ctx.request_repaint();
-                })
-                .ok();
-        }
+        // The window is revealed from `update` once a fully themed frame has
+        // been presented. Do not force it visible from a timer: on a cold
+        // start that raced the first OpenGL frame and flashed the white
+        // default window background.
 
         app.rescan();
         app.init_updates(&cc.egui_ctx);
@@ -542,6 +566,27 @@ impl AuraApp {
             .iter()
             .map(|&index| self.items[index].clone())
             .collect()
+    }
+
+    /// Display numbers (1, 2, …) where `path` is currently applied. The
+    /// library and explore cards use this to show the real multi-monitor
+    /// state instead of the single global `last_applied` value.
+    pub fn applied_display_numbers(&self, path: &Path) -> Vec<u32> {
+        assigned_display_numbers(&self.cfg.assignments, &self.monitors, path)
+    }
+
+    /// True when any monitor assignment points at `path`, including monitors
+    /// that are currently disconnected or have an unparseable device name.
+    pub fn is_media_applied(&self, path: &Path) -> bool {
+        self.cfg
+            .assignments
+            .values()
+            .any(|assignment| assignment.path.as_path() == path)
+    }
+
+    /// Local file a remote catalog item would occupy after downloading.
+    pub fn remote_local_path(&self, item: &RemoteItem) -> PathBuf {
+        util::online_dir().join(item.local_filename())
     }
 
     pub fn toggle_favorite(&mut self, path: &Path) {
@@ -1600,7 +1645,9 @@ impl AuraApp {
             use raw_window_handle::{HasWindowHandle, RawWindowHandle};
             if let Ok(handle) = frame.window_handle() {
                 if let RawWindowHandle::Win32(win32) = handle.as_raw() {
-                    self.main_hwnd = Some(win32.hwnd.get());
+                    let raw = win32.hwnd.get();
+                    self.main_hwnd = Some(raw);
+                    win::prepare_window(windows::Win32::Foundation::HWND(raw as *mut _));
                 }
             }
         }
@@ -1637,12 +1684,24 @@ impl AuraApp {
 
 impl eframe::App for AuraApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        // The main panels paint their own translucent background; clearing to
-        // transparent lets the desktop show through the configured opacity.
-        [0.0, 0.0, 0.0, 0.0]
+        // A transparent surface lets the desktop show through the configured
+        // opacity, but the very first frame can be composited as white before
+        // the GL surface is presented. Clear with the theme background only
+        // for that first (still hidden) frame; by the time the window is
+        // revealed the surface is already transparent and fully painted.
+        if self.startup_frames == 0 && !self.revealed {
+            let [r, g, b, _] = theme::palette().bg.to_array();
+            [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+        } else {
+            [0.0, 0.0, 0.0, 0.0]
+        }
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.revealed {
+            self.startup_frames = self.startup_frames.saturating_add(1);
+        }
+
         if !self.startup_done {
             self.startup_done = true;
             if self.cfg.start_hidden {
@@ -1792,13 +1851,18 @@ impl eframe::App for AuraApp {
             }
         }
 
-        // Reveal the window only after a fully themed frame has been painted.
-        // Creating it visible made the transparent surface flash white while
-        // the GL context was still starting up.
+        // Reveal the window only after a fully themed frame has been presented.
+        // Viewport commands are applied after `swap_buffers`, so waiting for
+        // the second frame guarantees the first visible content is the frame
+        // already painted, not the white default surface.
         if !self.revealed {
-            self.revealed = true;
-            if !self.hidden {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            if self.startup_frames >= 2 {
+                self.revealed = true;
+                if !self.hidden {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                }
+            } else {
+                ctx.request_repaint();
             }
         }
 
@@ -1881,8 +1945,82 @@ pub fn run(hidden: bool, action: Option<String>) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{pause_flags, parked_step, PAUSE_BATTERY, PAUSE_FULLSCREEN, PAUSE_OCCLUSION};
-    use crate::config::Config;
+    use super::{
+        assigned_display_numbers, pause_flags, parked_step, PAUSE_BATTERY, PAUSE_FULLSCREEN,
+        PAUSE_OCCLUSION,
+    };
+    use crate::config::{Assignment, Config, Scaling};
+    use crate::platform::win::{MonitorInfo, RectI};
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    fn monitor(key: &str) -> MonitorInfo {
+        MonitorInfo {
+            key: key.to_string(),
+            name: String::new(),
+            rect: RectI {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1080,
+            },
+            work: RectI {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1080,
+            },
+            primary: false,
+            dpi: 96,
+        }
+    }
+
+    #[test]
+    fn display_badges_follow_each_monitor_assignment() {
+        let mut assignments = BTreeMap::new();
+        assignments.insert(
+            r"\\.\DISPLAY1".to_string(),
+            Assignment::new(PathBuf::from("C:/a.jpg"), Scaling::Fill),
+        );
+        assignments.insert(
+            r"\\.\DISPLAY2".to_string(),
+            Assignment::new(PathBuf::from("C:/b.jpg"), Scaling::Fill),
+        );
+        let monitors = vec![monitor(r"\\.\DISPLAY1"), monitor(r"\\.\DISPLAY2")];
+        assert_eq!(
+            assigned_display_numbers(&assignments, &monitors, Path::new("C:/a.jpg")),
+            vec![1]
+        );
+        assert_eq!(
+            assigned_display_numbers(&assignments, &monitors, Path::new("C:/b.jpg")),
+            vec![2]
+        );
+    }
+
+    #[test]
+    fn display_badges_expand_wildcards_and_disconnected_keys() {
+        let mut assignments = BTreeMap::new();
+        assignments.insert(
+            "*".to_string(),
+            Assignment::new(PathBuf::from("C:/both.jpg"), Scaling::Fill),
+        );
+        assignments.insert(
+            r"\\.\DISPLAY7".to_string(),
+            Assignment::new(PathBuf::from("C:/away.jpg"), Scaling::Fill),
+        );
+        let monitors = vec![monitor(r"\\.\DISPLAY1"), monitor(r"\\.\DISPLAY2")];
+        assert_eq!(
+            assigned_display_numbers(&assignments, &monitors, Path::new("C:/both.jpg")),
+            vec![1, 2]
+        );
+        assert_eq!(
+            assigned_display_numbers(&assignments, &monitors, Path::new("C:/away.jpg")),
+            vec![7]
+        );
+        assert!(
+            assigned_display_numbers(&assignments, &monitors, Path::new("C:/none.jpg")).is_empty()
+        );
+    }
 
     #[test]
     fn pause_flags_only_include_enabled_checks() {

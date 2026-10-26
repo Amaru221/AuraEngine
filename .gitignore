@@ -1,12 +1,82 @@
-﻿/target
-/dist
-/mpv.exe
-/installer/mpv.exe
-*.pdb
-*.zip
+﻿# ---------------------------------------------------------------------------
+# Aura Engine is a source repository. Keep only code, build scripts, docs and
+# release metadata under version control; everything below is local tooling,
+# generated output or OS noise.
+# ---------------------------------------------------------------------------
+
+# Local agent / editor tooling (not part of the application)
+/.opencode/
+/.claude/
+/.cursor/
+/mcp-architecture-context/
+/opencode.json
+/graphify-out/
+/.graphify/
+/WORKFLOW_STATE.md
+.idea/
+.vscode/
+*.code-workspace
+*.iml
+
+# Local environment and secrets
+.env
+.env.*
+*.local
 *.pfx
 *.p12
 *.key
+*.pem
+
+# Build, packaging and generated binaries
+/target/
+/dist/
+/build/
+/out/
+/mpv.exe
+/installer/mpv.exe
+/mpv/
+*.pdb
+*.zip
+*.7z
+*.rar
+*.msi
+*.msix
+*.appx
+*.nupkg
+*.tar
+*.gz
+*.exe
+*.dll
+*.lib
+*.exp
+*.obj
+*.ilk
+
+# Logs, dumps and temporary files
+*.log
+/logs/
+*.tmp
+*.temp
+*.part
+*.partial
+*.bak
+*.orig
+*.old
+*.rej
+*.swp
+*.swo
+*~
 /release-body.md
-.idea/
-.vscode/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+System Volume Information/
+
+# Local caches (thumbnails, catalogs, watch state)
+.cache/
+/.cache/
+/thumbnails/

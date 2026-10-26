@@ -179,11 +179,10 @@ impl AuraApp {
     fn library_card(&mut self, ui: &mut egui::Ui, item: &MediaItem) {
         self.request_thumb(item);
         let thumb_key = Self::thumb_key_for(item);
-        let applied = self
-            .cfg
-            .last_applied
-            .as_ref()
-            .is_some_and(|p| p == &item.path);
+        // Detect the real per-monitor state, so two different wallpapers on
+        // two displays are both marked correctly.
+        let displays = self.applied_display_numbers(&item.path);
+        let applied = !displays.is_empty() || self.is_media_applied(&item.path);
 
         let (rect, _) = ui.allocate_exact_size(Vec2::new(CARD_W, CARD_H + CARD_TEXT_H), Sense::hover());
         let info = CardInfo {
@@ -199,10 +198,20 @@ impl AuraApp {
             favorite: self.favorites.contains(&item.path),
             applied,
             applied_label: self.strings.applied_badge,
+            displays: &displays,
             accent: self.accent,
         };
-        let response = draw_card(ui, rect, &self.thumbs, &info)
-            .on_hover_text(format!("{}\n{}", item.name, crate::util::human_size(item.size)));
+        let mut tooltip = format!("{}\n{}", item.name, crate::util::human_size(item.size));
+        if !displays.is_empty() {
+            let labels = displays
+                .iter()
+                .map(|number| format!("{} {number}", self.strings.display))
+                .collect::<Vec<_>>()
+                .join(", ");
+            tooltip.push('\n');
+            tooltip.push_str(&labels);
+        }
+        let response = draw_card(ui, rect, &self.thumbs, &info).on_hover_text(tooltip);
 
         // A click that closes a context menu (or any popup) must not fall
         // through to the card underneath.
@@ -265,6 +274,8 @@ pub struct CardInfo<'a> {
     pub favorite: bool,
     pub applied: bool,
     pub applied_label: &'a str,
+    /// Windows display numbers where this media is applied, ascending.
+    pub displays: &'a [u32],
     pub accent: Color32,
 }
 
@@ -351,7 +362,9 @@ pub fn draw_card(
         },
     );
 
-    if info.applied {
+    if !info.displays.is_empty() {
+        draw_display_badges(painter, image_rect, info.displays, info.accent);
+    } else if info.applied {
         let applied_rect = Rect::from_min_size(
             image_rect.right_top() + Vec2::new(-62.0, 8.0),
             Vec2::new(54.0, 18.0),
@@ -410,6 +423,36 @@ pub fn draw_card(
     }
 
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Small numbered chips (1, 2, …) over a card image, one per display where
+/// that media is currently applied. Shared by the library and explore cards.
+pub fn draw_display_badges(
+    painter: &egui::Painter,
+    image_rect: Rect,
+    displays: &[u32],
+    accent: Color32,
+) {
+    let height = 18.0;
+    let gap = 4.0;
+    let mut right = image_rect.right() - 8.0;
+    for number in displays.iter().rev() {
+        let text = number.to_string();
+        let width = 16.0 + text.len() as f32 * 5.5;
+        let rect = Rect::from_min_max(
+            egui::pos2(right - width, image_rect.top() + 8.0),
+            egui::pos2(right, image_rect.top() + 8.0 + height),
+        );
+        painter.rect_filled(rect, 5, accent);
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            text,
+            FontId::proportional(9.5),
+            theme::contrast_on(accent),
+        );
+        right -= width + gap;
+    }
 }
 
 pub fn cover_uv(aspect: f32, rect: Rect) -> Rect {
