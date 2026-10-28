@@ -253,6 +253,16 @@ pub fn icon_large(text: &str, size: f32) -> egui::RichText {
     egui::RichText::new(text).font(FontId::new(size, FontFamily::Name("icons".into())))
 }
 
+/// Theme used by the app palette. Pinning this (instead of following the OS)
+/// keeps the interface on the palette the user picked.
+pub fn theme_of(palette: Palette) -> egui::Theme {
+    if palette.light {
+        egui::Theme::Light
+    } else {
+        egui::Theme::Dark
+    }
+}
+
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
@@ -309,11 +319,45 @@ pub fn install_fonts(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(10.0, 10.0);
     style.spacing.button_padding = egui::vec2(12.0, 7.0);
     style.spacing.scroll.bar_width = 8.0;
-    ctx.set_style(style);
+    // `set_style` only writes the slot of the currently resolved theme. At this
+    // point the system theme is not known yet, so write both slots: an OS
+    // light/dark switch would otherwise expose egui's default spacing and font
+    // sizes (the "other theme" flash).
+    ctx.set_style_of(egui::Theme::Dark, style.clone());
+    ctx.set_style_of(egui::Theme::Light, style);
 }
 
 pub fn apply(ctx: &egui::Context, accent: Color32) {
     let palette = palette();
+    let theme = theme_of(palette);
+
+    // Pin the preference so a system theme switch (or the `ThemeChanged` event
+    // winit emits right after creating the window) can never resolve to egui's
+    // built-in style of the other theme.
+    ctx.set_theme(match theme {
+        egui::Theme::Light => egui::ThemePreference::Light,
+        egui::Theme::Dark => egui::ThemePreference::Dark,
+    });
+
+    let visuals = build_visuals(palette, accent);
+
+    // Fill both style slots. `set_visuals` only writes the slot that is active
+    // *right now*, so the other one kept egui's default visuals (white
+    // surfaces on the light theme) and the first frame could paint them.
+    ctx.set_visuals_of(egui::Theme::Dark, visuals.clone());
+    ctx.set_visuals_of(egui::Theme::Light, visuals.clone());
+    ctx.set_visuals(visuals);
+
+    // Keep the native window frame in the app palette instead of following
+    // Windows' app theme. Without this, DWM paints a light/white border around
+    // the borderless window while it is being revealed.
+    ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(match theme {
+        egui::Theme::Light => egui::SystemTheme::Light,
+        egui::Theme::Dark => egui::SystemTheme::Dark,
+    }));
+}
+
+fn build_visuals(palette: Palette, accent: Color32) -> Visuals {
     let mut visuals = if palette.light {
         Visuals::light()
     } else {
@@ -368,7 +412,7 @@ pub fn apply(ctx: &egui::Context, accent: Color32) {
     visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, palette.border);
     visuals.widgets.open.corner_radius = CornerRadius::same(10);
 
-    ctx.set_visuals(visuals);
+    visuals
 }
 
 pub fn accent_from_path(path: &Path) -> Option<(Color32, bool)> {
@@ -470,5 +514,22 @@ mod tests {
         let light = Palette::custom(Color32::from_rgb(240, 242, 248));
         assert!(light.light);
         assert!(light.text.r() < 80);
+    }
+
+    #[test]
+    fn apply_writes_the_palette_to_both_theme_slots() {
+        // egui resolves `ThemePreference::System` to the OS theme on the first
+        // pass. If only one slot is written, the other one keeps egui's default
+        // visuals (white on the light theme) and the window flashes "another
+        // theme" while it is being revealed.
+        let ctx = egui::Context::default();
+        set_preset(ThemePreset::Dark, None);
+        apply(&ctx, DEFAULT_ACCENT);
+
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            let visuals = ctx.style_of(theme).visuals.clone();
+            assert_eq!(visuals.panel_fill, bg());
+            assert_eq!(visuals.window_fill, palette().panel);
+        }
     }
 }

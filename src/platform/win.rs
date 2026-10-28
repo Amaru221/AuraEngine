@@ -8,8 +8,8 @@ use windows::Win32::Foundation::{
     GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, POINT, RECT, TRUE,
 };
 use windows::Win32::Graphics::Dwm::{
-    DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAKED,
-    DWMWA_USE_IMMERSIVE_DARK_MODE,
+    DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CLOAKED,
+    DWMWA_COLOR_NONE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWINDOWATTRIBUTE,
 };
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, DISPLAY_DEVICEW,
@@ -564,21 +564,36 @@ pub fn open_logs_folder() {
     util::open_path(&util::logs_dir());
 }
 
-/// Removes the default window-class background brush and asks DWM for dark
-/// non-client rendering.
+/// Removes the default window-class background brush, forces DWM's dark
+/// non-client rendering and drops the 1 px system border.
 ///
 /// A freshly created borderless/transparent window can otherwise let Windows
 /// paint its white default client background before the first OpenGL frame is
-/// presented, which shows up as a white flash while Aura starts.
+/// presented, which shows up as a white flash while Aura starts. Windows 11 also
+/// draws a thin frame around resizable windows using the system theme color; on
+/// a light theme that frame is white and stays visible for a few frames while
+/// the window is revealed. Aura paints its own border in `ui::window_border`,
+/// so DWM's is removed.
 pub fn prepare_window(hwnd: HWND) {
     unsafe {
         let _ = SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
+
         let dark = BOOL(1);
+        let dark_ptr = &dark as *const _ as *const std::ffi::c_void;
+        let dark_size = std::mem::size_of::<BOOL>() as u32;
+        // Attribute 20 since Windows 10 20H1; older builds only know 19.
+        if DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, dark_ptr, dark_size).is_err() {
+            let _ = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(19), dark_ptr, dark_size);
+        }
+
+        // Windows 11 21H2+: no system-colored frame. Older builds reject the
+        // attribute, which is harmless.
+        let no_border = DWMWA_COLOR_NONE;
         let _ = DwmSetWindowAttribute(
             hwnd,
-            DWMWA_USE_IMMERSIVE_DARK_MODE,
-            &dark as *const _ as *const std::ffi::c_void,
-            std::mem::size_of::<BOOL>() as u32,
+            DWMWA_BORDER_COLOR,
+            &no_border as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
         );
     }
 }

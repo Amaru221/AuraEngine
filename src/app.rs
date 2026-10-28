@@ -178,10 +178,12 @@ pub struct AuraApp {
     /// The window is created hidden and revealed only after a couple of painted
     /// frames, which removes the white/transparent flash on startup.
     pub revealed: bool,
-    /// Frames painted while the window is still hidden. The viewport command
-    /// is applied after `swap_buffers`, so the first visible frame is already
-    /// fully themed.
+    /// Frames fully presented since startup. `clear_color` runs before
+    /// `update`, so it reads the number of frames already on screen.
     startup_frames: u8,
+    /// Set once `theme::apply` has run with the system theme already known.
+    /// Before that, egui may resolve the other (default) theme slot.
+    theme_synced: bool,
     pub initial_action: Option<String>,
     pub main_hwnd: Option<isize>,
     pub parked: Option<bool>,
@@ -221,6 +223,16 @@ fn hotkeys_enabled(fullscreen: bool, hud_open: bool) -> bool {
 const PAUSE_FULLSCREEN: u8 = 1;
 const PAUSE_OCCLUSION: u8 = 2;
 const PAUSE_BATTERY: u8 = 4;
+
+/// Number of frames that must be on screen before revealing the window.
+/// Viewport commands are applied before the current frame is painted, so the
+/// window shows a buffer that is already painted.
+const REVEAL_AFTER_FRAMES: u8 = 3;
+
+/// Frames cleared with the opaque theme background. One extra frame after the
+/// reveal guarantees that any buffer DWM composites while showing the window is
+/// dark, never the white default surface.
+const OPAQUE_CLEAR_FRAMES: u8 = REVEAL_AFTER_FRAMES + 1;
 
 fn pause_flags(cfg: &Config) -> u8 {
     let mut flags = 0;
@@ -427,6 +439,7 @@ impl AuraApp {
             startup_done: false,
             revealed: false,
             startup_frames: 0,
+            theme_synced: false,
             initial_action,
             main_hwnd: None,
             parked: None,
@@ -1680,11 +1693,10 @@ impl AuraApp {
 impl eframe::App for AuraApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         // A transparent surface lets the desktop show through the configured
-        // opacity, but the very first frame can be composited as white before
-        // the GL surface is presented. Clear with the theme background only
-        // for that first (still hidden) frame; by the time the window is
-        // revealed the surface is already transparent and fully painted.
-        if self.startup_frames == 0 && !self.revealed {
+        // opacity. Every buffer rendered before the window is revealed must be
+        // opaque instead: if DWM composites a stale one while showing the
+        // window, it would otherwise flash the white default surface.
+        if self.startup_frames < OPAQUE_CLEAR_FRAMES {
             let [r, g, b, _] = theme::palette().bg.to_array();
             [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
         } else {
@@ -1693,10 +1705,6 @@ impl eframe::App for AuraApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if !self.revealed {
-            self.startup_frames = self.startup_frames.saturating_add(1);
-        }
-
         if !self.startup_done {
             self.startup_done = true;
             if self.cfg.start_hidden {
@@ -1804,9 +1812,14 @@ impl eframe::App for AuraApp {
         self.poll_accent();
         self.poll_updates(ctx);
 
-        if self.accent != self.applied_accent {
+        // Re-apply the palette on the first frame: `AuraApp::new` runs before
+        // egui knows the system theme. `theme::apply` is idempotent and also
+        // sends the native window theme, which is only applied once the
+        // viewport exists.
+        if !self.theme_synced || self.accent != self.applied_accent {
             theme::apply(ctx, self.accent);
             self.applied_accent = self.accent;
+            self.theme_synced = true;
         }
 
         if self.hud_open {
@@ -1846,12 +1859,12 @@ impl eframe::App for AuraApp {
             }
         }
 
-        // Reveal the window only after a fully themed frame has been presented.
-        // Viewport commands are applied after `swap_buffers`, so waiting for
-        // the second frame guarantees the first visible content is the frame
-        // already painted, not the white default surface.
+        // Reveal the window only after several fully themed frames have been
+        // presented. Viewport commands are applied before the current frame is
+        // painted, so the window shows an already painted buffer; the extra
+        // frame (vs. the old two) covers slow first swaps (shader compilation).
         if !self.revealed {
-            if self.startup_frames >= 2 {
+            if self.startup_frames >= REVEAL_AFTER_FRAMES {
                 self.revealed = true;
                 if !self.hidden {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
@@ -1859,6 +1872,12 @@ impl eframe::App for AuraApp {
             } else {
                 ctx.request_repaint();
             }
+        }
+
+        // Frames already presented. `clear_color` runs before `update`, so it
+        // sees the number of frames that are on screen, not the current one.
+        if self.startup_frames <= OPAQUE_CLEAR_FRAMES {
+            self.startup_frames = self.startup_frames.saturating_add(1);
         }
 
         // Animate only when something is actually moving. egui repaints on

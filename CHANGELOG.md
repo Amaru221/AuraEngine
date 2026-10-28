@@ -2,6 +2,20 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- White "other theme" frame flash when opening the window. The palette was
+  applied before egui knew the system theme, and `set_visuals`/`set_style` only
+  write the style slot of the *currently resolved* theme. On a light Windows
+  theme the first frames could therefore render with egui's default light
+  style (white surfaces and a white native frame). The theme is now pinned with
+  `ThemePreference`, the palette is written to both style slots, the native DWM
+  theme follows the app palette, and DWM's 1 px system border is removed with
+  `DWMWA_BORDER_COLOR`. The window is revealed after three painted frames while
+  the clear color stays opaque, so a stale buffer can never show white.
+
 ## [1.1.0] - 2026-10-26
 
 ### Changed
