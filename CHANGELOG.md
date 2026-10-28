@@ -15,6 +15,15 @@ All notable changes to Aura Engine are documented here.
   theme follows the app palette, and DWM's 1 px system border is removed with
   `DWMWA_BORDER_COLOR`. The window is revealed after three painted frames while
   the clear color stays opaque, so a stale buffer can never show white.
+- White system frame on every window activation (Alt+Tab, restore from
+  minimized, unhide from the tray). winit keeps `WS_CAPTION`/`WS_THICKFRAME` on
+  undecorated windows, and `DefWindowProc` paints the default non-client frame
+  and caption buttons over the borderless UI when it receives `WM_NCACTIVATE`.
+  The main window procedure is now subclassed to answer `WM_NCACTIVATE` /
+  `WM_NCPAINT` itself, so the OS frame is never drawn. Verified with a
+  frame-by-frame capture: the white 7 px ring plus caption buttons that appeared
+  on activation are gone, while focus, resize, minimize and maximize keep
+  working.
 
 ## [1.1.0] - 2026-10-26
 

@@ -1,11 +1,13 @@
 ﻿//! Windows-specific helpers: monitors, power, fullscreen detection, registry.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicIsize, Ordering};
 
 use anyhow::{Context, Result};
 use windows::core::{w, BOOL, PCWSTR};
 use windows::Win32::Foundation::{
-    GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, POINT, RECT, TRUE,
+    GetLastError, SetLastError, ERROR_ALREADY_EXISTS, ERROR_SUCCESS, HWND, LPARAM, LRESULT, POINT,
+    RECT, TRUE, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CLOAKED,
@@ -26,13 +28,14 @@ use windows::Win32::UI::Shell::{
     QUNS_NOT_PRESENT, QUNS_RUNNING_D3D_FULL_SCREEN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
-    GetWindowLongPtrW, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, IsIconic,
-    FlashWindowEx, IsWindowVisible, SendMessageTimeoutW, SetClassLongPtrW, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, FLASHWINFO, FLASHW_ALL, GCLP_HBRBACKGROUND, GWL_EXSTYLE,
-    HWND_BROADCAST, HWND_TOP, SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER,
-    SWP_SHOWWINDOW, SW_SHOWNORMAL, WM_SETTINGCHANGE, WS_EX_TOOLWINDOW,
+    CallWindowProcW, DefWindowProcW, EnumWindows, GetClassLongPtrW, GetClassNameW, GetCursorPos,
+    GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowLongW, GetWindowRect,
+    GetWindowThreadProcessId, IsIconic, FlashWindowEx, IsWindowVisible, SendMessageTimeoutW,
+    SetClassLongPtrW, SetWindowLongPtrW, SetWindowPos, ShowWindow, FLASHWINFO, FLASHW_ALL,
+    GCLP_HBRBACKGROUND, GCLP_WNDPROC, GWLP_WNDPROC, GWL_EXSTYLE, HWND_BROADCAST, HWND_TOP,
+    SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SW_SHOWNORMAL, WM_NCACTIVATE, WM_NCPAINT, WM_SETTINGCHANGE, WS_EX_TOOLWINDOW,
 };
 
 use crate::util;
@@ -564,8 +567,87 @@ pub fn open_logs_folder() {
     util::open_path(&util::logs_dir());
 }
 
+/// Original winit window procedure, kept so every non-intercepted message can
+/// still reach eframe/winit.
+static ORIGINAL_WINDOW_PROC: AtomicIsize = AtomicIsize::new(0);
+
+/// HWND whose window procedure has already been subclassed.
+static SUBCLASSED_WINDOW: AtomicIsize = AtomicIsize::new(0);
+
+type WndProcFn = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
+
+/// Suppresses the standard non-client painting of the borderless main window.
+///
+/// winit keeps `WS_CAPTION`/`WS_THICKFRAME` on undecorated top-level windows
+/// (needed for Aero Snap and `BeginResize`) and makes the non-client area zero
+/// sized from `WM_NCCALCSIZE`, but it still forwards `WM_NCACTIVATE` and
+/// `WM_NCPAINT` to `DefWindowProc`. On activation (Alt+Tab, restore from
+/// minimized) `DefWindowProc` paints the default non-client frame and caption
+/// buttons over the UI for one or more frames, which is the white "other
+/// theme" border flash. Aura draws its own title bar and border, so the
+/// default paint is answered here and never reaches `DefWindowProc`.
+///
+/// Focus events are still delivered because winit sends `Focused` from
+/// `WM_SETFOCUS`/`WM_KILLFOCUS`, not from this message.
+unsafe extern "system" fn aura_window_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        // "The non-client area is up to date": prevents the OS frame repaint.
+        WM_NCACTIVATE => return LRESULT(1),
+        WM_NCPAINT => return LRESULT(0),
+        _ => {}
+    }
+
+    let original = ORIGINAL_WINDOW_PROC.load(Ordering::Relaxed);
+    if original != 0 {
+        let proc: WndProcFn = unsafe { std::mem::transmute(original) };
+        return unsafe { CallWindowProcW(Some(proc), hwnd, msg, wparam, lparam) };
+    }
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+/// Installs [`aura_window_proc`] on the main window. Safe to call repeatedly:
+/// only the first call per HWND does the subclassing.
+fn install_borderless_proc(hwnd: HWND) {
+    let value = hwnd.0 as isize;
+    if SUBCLASSED_WINDOW.swap(value, Ordering::SeqCst) == value {
+        return;
+    }
+
+    unsafe {
+        SetLastError(ERROR_SUCCESS);
+        let previous = SetWindowLongPtrW(
+            hwnd,
+            GWLP_WNDPROC,
+            aura_window_proc as *const () as isize,
+        );
+        if GetLastError() != ERROR_SUCCESS {
+            log::warn!(
+                "could not subclass the main window procedure: {:?}",
+                GetLastError()
+            );
+            SUBCLASSED_WINDOW.store(0, Ordering::SeqCst);
+        } else {
+            // A window can use its class procedure without having a per-window
+            // one; in that case chain to the class procedure.
+            let chain = if previous != 0 {
+                previous
+            } else {
+                GetClassLongPtrW(hwnd, GCLP_WNDPROC) as isize
+            };
+            ORIGINAL_WINDOW_PROC.store(chain, Ordering::SeqCst);
+            log::info!("borderless window procedure installed for {hwnd:?}");
+        }
+    }
+}
+
 /// Removes the default window-class background brush, forces DWM's dark
-/// non-client rendering and drops the 1 px system border.
+/// non-client rendering, drops the 1 px system border and stops Windows from
+/// painting the standard frame on activation.
 ///
 /// A freshly created borderless/transparent window can otherwise let Windows
 /// paint its white default client background before the first OpenGL frame is
@@ -575,6 +657,8 @@ pub fn open_logs_folder() {
 /// the window is revealed. Aura paints its own border in `ui::window_border`,
 /// so DWM's is removed.
 pub fn prepare_window(hwnd: HWND) {
+    install_borderless_proc(hwnd);
+
     unsafe {
         let _ = SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
 
