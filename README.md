@@ -30,7 +30,7 @@ UI (egui)  ──►  WorkerW (capa del escritorio)  ──►  mpv --wid  ─�
 - **Esquinas redondeadas** y cierre completo desde la bandeja (con watchdog si el apagado se bloquea).
 - **Atajos globales** (Ctrl+Alt+…).
 - **Biblioteca local** con miniaturas (mpv extrae el primer fotograma), búsqueda, filtros y favoritos. Las tarjetas de **Biblioteca** indican con badges `1`, `2`… en qué pantalla está aplicado cada fondo, incluyendo el caso de una misma imagen en varias pantallas.
-- **Arranque sin parpadeo**: la ventana se crea invisible, se pinta con la paleta de la app en ambos temas de egui (y en el marco nativo de DWM) y se limpia con el fondo opaco hasta un frame después de mostrarse, evitando el destello blanco del marco incluso con Windows en modo claro.
+- **Arranque sin parpadeo**: la ventana se crea invisible, se pinta con la paleta de la app en ambos temas de egui (y en el marco nativo de DWM) y se limpia con el fondo opaco hasta un frame después de mostrarse. Windows tampoco puede pintar su marco estándar al activar la ventana (Alt+Tab, minimizar/restaurar o volver desde la bandeja), evitando el destello blanco incluso con Windows en modo claro.
 - **Catálogos online**: Wallhaven, Bing Daily, **MotionBGS** (live wallpapers 4K/1080p) y Pexels (clave opcional).
 - **Tema dinámico**: extrae el color dominante del fondo y adapta la interfaz; opcionalmente tiñe el acento de Windows (best-effort).
 - **Interfaz en español, inglés y francés**, seleccionable al instante en Ajustes → General.
