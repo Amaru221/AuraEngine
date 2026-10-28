@@ -84,13 +84,13 @@ El instalador crea el grupo **Aura Engine** en el menú Inicio (busca "Aura Engi
 Instalación silenciosa:
 
 ```powershell
-.\aura-v1.1.0-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+.\aura-v1.1.1-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ```
 
 ### Opción B — Portable
 
 ```powershell
-cd .\dist\aura-v1.1.0-windows-x64
+cd .\dist\aura-v1.1.1-windows-x64
 .\aura.exe
 ```
 
@@ -126,7 +126,7 @@ cargo build --release
 .\scripts\build-installer.ps1 -Sign  # instalador Inno Setup
 ```
 
-Genera `dist\aura-v1.1.0-windows-x64.zip` y `dist\aura-v1.1.0-windows-x64-setup.exe`.
+Genera `dist\aura-v1.1.1-windows-x64.zip` y `dist\aura-v1.1.1-windows-x64-setup.exe`.
 El instalador necesita [Inno Setup 6](https://jrsoftware.org/isinfo.php)
 (`winget install --id JRSoftware.InnoSetup -e`).
 
