@@ -1,5 +1,6 @@
 ﻿//! Windows-specific helpers: monitors, power, fullscreen detection, registry.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicIsize, Ordering};
 
@@ -36,11 +37,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
     SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW,
     SW_SHOWNORMAL, WM_NCACTIVATE, WM_NCPAINT, WM_SETTINGCHANGE, WS_EX_TOOLWINDOW,
+    EDD_GET_DEVICE_INTERFACE_NAME,
 };
 
 use crate::util;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct RectI {
     pub left: i32,
     pub top: i32,
@@ -93,10 +95,54 @@ pub fn display_number(key: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// Normalizes a PnP monitor interface path so it can be compared across APIs.
+///
+/// `EnumDisplayDevicesW(..., EDD_GET_DEVICE_INTERFACE_NAME)` and
+/// `IDesktopWallpaper` both report paths such as
+/// `\\?\DISPLAY#GSM5C8A#5&d89a054&1&UID4353#{e6f07b5f-...}`. The trailing
+/// interface GUID is the same for every monitor, so the part before it (in
+/// upper case) identifies the physical panel.
+pub fn normalize_monitor_identity(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let head = raw.split("#{").next().unwrap_or(raw).trim_end_matches('#');
+    if head.is_empty() {
+        None
+    } else {
+        Some(head.to_ascii_uppercase())
+    }
+}
+
+/// Stable identity of the panel behind an adapter device name
+/// (`\\.\DISPLAY6`). Empty when Windows cannot resolve the monitor device.
+fn monitor_identity(device: &[u16]) -> String {
+    let mut info = DISPLAY_DEVICEW::default();
+    info.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+    let ok = unsafe {
+        EnumDisplayDevicesW(
+            PCWSTR(device.as_ptr()),
+            0,
+            &mut info,
+            EDD_GET_DEVICE_INTERFACE_NAME,
+        )
+    }
+    .as_bool();
+    if !ok {
+        return String::new();
+    }
+    normalize_monitor_identity(&util::from_wide_buf(&info.DeviceID)).unwrap_or_default()
+}
+
 #[derive(Clone, Debug)]
 pub struct MonitorInfo {
-    /// Device name, e.g. `\\.\DISPLAY1`.
+    /// Device name, e.g. `\\.\DISPLAY1`. Windows renumbers it after a driver
+    /// update or a port change, so it must not be used as a stable identity.
     pub key: String,
+    /// Stable PnP identity of the panel (see [`normalize_monitor_identity`]).
+    /// Empty when it cannot be resolved.
+    pub id: String,
     /// Friendly adapter/monitor name when available.
     pub name: String,
     pub rect: RectI,
@@ -207,6 +253,7 @@ unsafe extern "system" fn monitor_enum_proc(
         let _ = unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
 
         ctx.monitors.push(MonitorInfo {
+            id: monitor_identity(&info.szDevice),
             key,
             name: friendly,
             rect: RectI::from_rect(info.monitorInfo.rcMonitor),
@@ -230,6 +277,22 @@ pub fn monitors() -> Vec<MonitorInfo> {
             LPARAM(&mut ctx as *mut _ as isize),
         );
     }
+
+    // A driver update can leave duplicated entries for the same panel for a
+    // few enumerations. Keep the first one so the UI never draws two numbers
+    // over the same screen or creates two hosts.
+    let mut keys = HashSet::new();
+    let mut panels = HashSet::new();
+    ctx.monitors.retain(|monitor| {
+        if !keys.insert(monitor.key.clone()) {
+            return false;
+        }
+        monitor.id.is_empty() || panels.insert((monitor.id.clone(), monitor.rect))
+    });
+
+    // Deterministic order: primary first, then left to right, top to bottom.
+    ctx.monitors
+        .sort_by_key(|monitor| (!monitor.primary, monitor.rect.left, monitor.rect.top));
     ctx.monitors
 }
 
@@ -733,6 +796,7 @@ mod tests {
     fn monitor(key: &str) -> MonitorInfo {
         MonitorInfo {
             key: key.to_string(),
+            id: String::new(),
             name: String::new(),
             rect: RectI { left: 0, top: 0, right: 1920, bottom: 1080 },
             work: RectI { left: 0, top: 0, right: 1920, bottom: 1080 },
@@ -749,5 +813,22 @@ mod tests {
         assert_eq!(monitor("custom").number(), None);
         assert_eq!(super::display_number(r"\\.\display3"), Some(3));
         assert_eq!(super::display_number("*"), None);
+    }
+
+    #[test]
+    fn monitor_identity_ignores_the_interface_guid_and_case() {
+        let path = r"\\?\DISPLAY#GSM5C8A#5&d89a054&1&UID4353#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
+        assert_eq!(
+            super::normalize_monitor_identity(path).as_deref(),
+            Some(r"\\?\DISPLAY#GSM5C8A#5&D89A054&1&UID4353")
+        );
+        // The same panel reported with another casing compares equal.
+        assert_eq!(
+            super::normalize_monitor_identity(
+                r"\\?\display#gsm5c8a#5&d89a054&1&uid4353#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+            ),
+            super::normalize_monitor_identity(path)
+        );
+        assert_eq!(super::normalize_monitor_identity(""), None);
     }
 }

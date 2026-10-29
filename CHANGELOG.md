@@ -2,6 +2,30 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- Display state was lost after updating the GPU driver while Aura was running.
+  Windows renumbers the display devices (`\\.\DISPLAY1` → `\\.\DISPLAY6`) and the
+  saved per-monitor assignments kept pointing at names that no longer existed,
+  so the wallpapers were not restored and the Library showed several display
+  numbers on the same card (a stale `1` next to the real `6`). Assignments now
+  store the stable PnP identity of the panel (`Assignment.monitor_id`) and are
+  re-linked to the current device name at startup and whenever the topology
+  changes. Library badges and the "applied" state only consider connected
+  screens, so disconnected entries can no longer add phantom numbers.
+- Static wallpapers could be applied to the wrong monitor because
+  `IDesktopWallpaper` was indexed with the `EnumDisplayMonitors` position.
+  Both lists have different orders and the COM one can keep a phantom monitor
+  from the previous driver. The panel is now resolved by identity, ignoring
+  phantom entries.
+- `EnumDisplayMonitors` results are deduplicated and sorted (primary first),
+  preventing duplicated entries for one panel after a driver update from
+  drawing two numbers on the same screen.
+- `aura doctor` prints each monitor's stable identity and the number of monitors
+  exposed by `IDesktopWallpaper`, which makes ghost displays easy to spot.
+
 ## [1.1.1] - 2026-10-28
 
 ### Fixed

@@ -248,26 +248,46 @@ fn pause_flags(cfg: &Config) -> u8 {
     flags
 }
 
-/// Windows display numbers where `path` is assigned. Wildcard assignments
-/// (`*`) expand to every detected monitor, and a key whose monitor is
-/// disconnected still contributes its parsed display number.
+/// Assignment that drives `monitor`: the device name, the wildcard fallback or
+/// the stable panel identity (after Windows renumbered the device).
+fn monitor_assignment<'a>(
+    assignments: &'a BTreeMap<String, Assignment>,
+    monitor: &win::MonitorInfo,
+) -> Option<&'a Assignment> {
+    assignments.get(&monitor.key).or_else(|| {
+        if monitor.id.is_empty() {
+            return assignments.get("*");
+        }
+        assignments
+            .values()
+            .find(|assignment| {
+                !assignment.monitor_id.is_empty()
+                    && assignment.monitor_id.eq_ignore_ascii_case(&monitor.id)
+            })
+            .or_else(|| assignments.get("*"))
+    })
+}
+
+/// Windows display numbers where `path` is assigned **on a connected screen**.
+///
+/// Device names of disconnected monitors are deliberately ignored: after a GPU
+/// driver update Windows renumbers the displays, so a stale `\\.\DISPLAY1`
+/// entry would render a number for a screen that no longer exists (and could
+/// now belong to another panel).
 fn assigned_display_numbers(
     assignments: &BTreeMap<String, Assignment>,
     monitors: &[win::MonitorInfo],
     path: &Path,
 ) -> Vec<u32> {
     let mut numbers = Vec::new();
-    for (key, assignment) in assignments {
+    for monitor in monitors {
+        let Some(assignment) = monitor_assignment(assignments, monitor) else {
+            continue;
+        };
         if assignment.path.as_path() != path {
             continue;
         }
-        if key == "*" {
-            numbers.extend(monitors.iter().filter_map(|monitor| monitor.number()));
-        } else if let Some(monitor) = monitors.iter().find(|monitor| &monitor.key == key) {
-            if let Some(number) = monitor.number() {
-                numbers.push(number);
-            }
-        } else if let Some(number) = win::display_number(key) {
+        if let Some(number) = monitor.number() {
             numbers.push(number);
         }
     }
@@ -335,6 +355,11 @@ impl AuraApp {
         // the list later; calling it here as well created every WorkerW host
         // twice before the first frame.
         let monitors = win::monitors();
+        // Windows renumbers display devices after a GPU driver update or a
+        // port change. Re-link the saved assignments to the panels before
+        // restoring them, otherwise the app forgets which screen had a
+        // wallpaper and shows numbers that no longer exist.
+        let monitors_reconciled = cfg.reconcile_monitors(&monitors);
         engine.set_monitors(monitors.clone());
 
         let (scan_tx, scan_rx) = crossbeam_channel::unbounded();
@@ -431,7 +456,7 @@ impl AuraApp {
             hotkeys: hotkeys::create(),
             last_tick: Instant::now(),
             pause_rx,
-            dirty: false,
+            dirty: monitors_reconciled,
             last_edit: Instant::now(),
             hidden,
             hidden_lost_foreground: false,
@@ -588,13 +613,19 @@ impl AuraApp {
         assigned_display_numbers(&self.cfg.assignments, &self.monitors, path)
     }
 
-    /// True when any monitor assignment points at `path`, including monitors
-    /// that are currently disconnected or have an unparseable device name.
+    /// Assignment that drives `monitor`, resolving device names that Windows
+    /// renumbered through the panel identity.
+    pub fn assignment_for_monitor(&self, monitor: &win::MonitorInfo) -> Option<&Assignment> {
+        monitor_assignment(&self.cfg.assignments, monitor)
+    }
+
+    /// True when a **connected** monitor is currently running `path`. Stale
+    /// assignments for disconnected screens must not mark a card as applied.
     pub fn is_media_applied(&self, path: &Path) -> bool {
-        self.cfg
-            .assignments
-            .values()
-            .any(|assignment| assignment.path.as_path() == path)
+        self.monitors.iter().any(|monitor| {
+            monitor_assignment(&self.cfg.assignments, monitor)
+                .is_some_and(|assignment| assignment.path.as_path() == path)
+        })
     }
 
     pub fn toggle_favorite(&mut self, path: &Path) {
@@ -814,6 +845,7 @@ impl AuraApp {
             else {
                 continue;
             };
+            let monitor = self.monitors[index].clone();
             let scaling = self
                 .cfg
                 .assignment_for(key)
@@ -822,7 +854,7 @@ impl AuraApp {
 
             // Remember the static wallpaper that was active before Aura.
             if !self.cfg.originals.contains_key(key) {
-                if let Ok(wall) = static_wallpaper::get_wallpaper(Some(index)) {
+                if let Ok(wall) = static_wallpaper::get_wallpaper_for(&monitor, Some(index)) {
                     if !wall.is_empty() && Path::new(&wall) != path {
                         self.cfg.originals.insert(key.clone(), wall);
                     }
@@ -856,7 +888,7 @@ impl AuraApp {
                 }
                 MediaKind::Image => {
                     self.engine.stop_monitor(key);
-                    match static_wallpaper::set_wallpaper(Some(index), path, scaling) {
+                    match static_wallpaper::set_wallpaper_for(&monitor, Some(index), path, scaling) {
                         Ok(()) => {
                             self.retry_counts.remove(key);
                             true
@@ -872,6 +904,7 @@ impl AuraApp {
 
             if success {
                 let mut assignment = Assignment::new(path.to_path_buf(), scaling);
+                assignment.monitor_id = monitor.id.clone();
                 if let Some(item) = &item {
                     assignment.thumb_key = item.thumb_key.clone();
                 }
@@ -944,7 +977,13 @@ impl AuraApp {
         for (key, path) in self.cfg.originals.clone() {
             if let Some(index) = self.monitors.iter().position(|m| m.key == key) {
                 if Path::new(&path).exists() {
-                    let _ = static_wallpaper::set_wallpaper(Some(index), Path::new(&path), Scaling::Fill);
+                    let monitor = self.monitors[index].clone();
+                    let _ = static_wallpaper::set_wallpaper_for(
+                        &monitor,
+                        Some(index),
+                        Path::new(&path),
+                        Scaling::Fill,
+                    );
                 }
             }
         }
@@ -977,7 +1016,7 @@ impl AuraApp {
 
         let monitors = self.monitors.clone();
         for monitor in &monitors {
-            if let Some(assignment) = self.cfg.assignment_for(&monitor.key).cloned() {
+            if let Some(assignment) = monitor_assignment(&self.cfg.assignments, monitor).cloned() {
                 if assignment.path.exists() {
                     self.apply_media(&assignment.path, Some(monitor.key.clone()));
                 } else {
@@ -1561,16 +1600,15 @@ impl AuraApp {
 
         // Engine::tick already enumerated the desktop; reuse that snapshot
         // instead of calling EnumDisplayMonitors a second time in this tick.
-        let changed = self.engine.tick(&self.cfg);
+        let mut changed = self.engine.tick(&self.cfg);
 
-        let fresh = self.engine.monitors();
+        let fresh = self.engine.monitors().to_vec();
         if fresh.len() != self.monitors.len()
-            || fresh
-                .iter()
-                .zip(self.monitors.iter())
-                .any(|(a, b)| a.key != b.key || a.rect != b.rect || a.dpi != b.dpi)
+            || fresh.iter().zip(self.monitors.iter()).any(|(a, b)| {
+                a.key != b.key || a.id != b.id || a.rect != b.rect || a.dpi != b.dpi
+            })
         {
-            self.monitors = fresh.to_vec();
+            self.monitors = fresh;
             // Keep per-monitor scaling selections in sync with reality.
             for monitor in &self.monitors {
                 self.monitor_scaling
@@ -1581,6 +1619,19 @@ impl AuraApp {
                             .map(|a| a.scaling)
                             .unwrap_or(Scaling::Fill)
                     });
+            }
+            // A GPU driver update (or a port/dock change) renumbers the
+            // display devices while Aura is running. Re-link the assignments
+            // to the panels that are present now so the wallpaper follows the
+            // screen instead of becoming an orphan entry.
+            if self.cfg.reconcile_monitors(&self.monitors) {
+                self.mark_dirty();
+                // The tick above used the old keys, so the engine may not have
+                // created the host for the re-linked monitor yet. Sync again
+                // and restart that wallpaper within this same tick.
+                changed.extend(self.engine.tick(&self.cfg));
+                changed.sort();
+                changed.dedup();
             }
         }
 
@@ -1971,6 +2022,7 @@ mod tests {
     fn monitor(key: &str) -> MonitorInfo {
         MonitorInfo {
             key: key.to_string(),
+            id: String::new(),
             name: String::new(),
             rect: RectI {
                 left: 0,
@@ -1988,6 +2040,8 @@ mod tests {
             dpi: 96,
         }
     }
+
+    const LG: &str = r"\\?\DISPLAY#GSM5C8A#5&D89A054&1&UID4353";
 
     #[test]
     fn display_badges_follow_each_monitor_assignment() {
@@ -2012,7 +2066,7 @@ mod tests {
     }
 
     #[test]
-    fn display_badges_expand_wildcards_and_disconnected_keys() {
+    fn display_badges_expand_wildcards_and_ignore_disconnected_keys() {
         let mut assignments = BTreeMap::new();
         assignments.insert(
             "*".to_string(),
@@ -2027,12 +2081,34 @@ mod tests {
             assigned_display_numbers(&assignments, &monitors, Path::new("C:/both.jpg")),
             vec![1, 2]
         );
-        assert_eq!(
-            assigned_display_numbers(&assignments, &monitors, Path::new("C:/away.jpg")),
-            vec![7]
+        // A disconnected device name is not a valid screen any more: after a
+        // driver update its number may belong to another panel.
+        assert!(
+            assigned_display_numbers(&assignments, &monitors, Path::new("C:/away.jpg")).is_empty()
         );
         assert!(
             assigned_display_numbers(&assignments, &monitors, Path::new("C:/none.jpg")).is_empty()
+        );
+    }
+
+    #[test]
+    fn display_badges_match_a_renumbered_panel_by_identity() {
+        let mut assignments = BTreeMap::new();
+        let mut assignment = Assignment::new(PathBuf::from("C:/a.jpg"), Scaling::Fill);
+        assignment.monitor_id = LG.to_string();
+        // Saved before the GPU driver update renamed DISPLAY1 -> DISPLAY6.
+        assignments.insert(r"\\.\DISPLAY1".to_string(), assignment);
+
+        let mut renumbered = monitor(r"\\.\DISPLAY6");
+        renumbered.id = LG.to_string();
+        let monitors = vec![renumbered, monitor(r"\\.\DISPLAY7")];
+        assert_eq!(
+            assigned_display_numbers(&assignments, &monitors, Path::new("C:/a.jpg")),
+            vec![6]
+        );
+        // Only the screen that actually has the wallpaper is marked.
+        assert!(
+            assigned_display_numbers(&assignments, &monitors, Path::new("C:/b.jpg")).is_empty()
         );
     }
 

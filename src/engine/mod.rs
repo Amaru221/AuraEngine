@@ -100,7 +100,7 @@ impl Engine {
             || fresh
                 .iter()
                 .zip(self.monitors.iter())
-                .any(|(a, b)| a.key != b.key || a.rect != b.rect || a.dpi != b.dpi)
+                .any(|(a, b)| a.key != b.key || a.id != b.id || a.rect != b.rect || a.dpi != b.dpi)
         {
             self.monitors = fresh;
         }

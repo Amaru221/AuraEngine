@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use windows::core::PCWSTR;
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL};
 use windows::Win32::UI::Shell::{
@@ -11,6 +11,7 @@ use windows::Win32::UI::Shell::{
 };
 
 use crate::config::Scaling;
+use crate::platform::win::{self, MonitorInfo};
 
 fn position_for(scaling: Scaling) -> DESKTOP_WALLPAPER_POSITION {
     match scaling {
@@ -26,11 +27,44 @@ fn desktop() -> Result<IDesktopWallpaper> {
         .context("create IDesktopWallpaper")
 }
 
-/// Applies a static image to one monitor (by index) or to every monitor.
-pub fn set_wallpaper(index: Option<usize>, path: &Path, scaling: Scaling) -> Result<()> {
+/// Reads the device path of one `IDesktopWallpaper` entry, freeing the COM
+/// string afterwards.
+fn device_path_at(dw: &IDesktopWallpaper, index: u32) -> Option<String> {
+    let path = unsafe { dw.GetMonitorDevicePathAt(index) }.ok()?;
+    let raw = unsafe { crate::util::from_wide_ptr(path.0) };
+    unsafe {
+        CoTaskMemFree(Some(path.0 as *const _));
+    }
+    Some(raw)
+}
+
+/// Position of `monitor` inside `IDesktopWallpaper`, matched by the stable PnP
+/// identity of the panel.
+///
+/// The COM list and `EnumDisplayMonitors` do not share an order, and after a
+/// GPU driver update the COM list can still contain a phantom monitor that is
+/// no longer attached. Matching by identity avoids applying a wallpaper to the
+/// wrong screen.
+fn monitor_index_for(dw: &IDesktopWallpaper, monitor: &MonitorInfo) -> Option<usize> {
+    let identity = win::normalize_monitor_identity(&monitor.id)?;
+    let count = unsafe { dw.GetMonitorDevicePathCount() }.unwrap_or(0);
+    (0..count)
+        .find(|&index| {
+            device_path_at(dw, index)
+                .and_then(|raw| win::normalize_monitor_identity(&raw))
+                .is_some_and(|id| id == identity)
+        })
+        .map(|index| index as usize)
+}
+
+fn apply(
+    dw: &IDesktopWallpaper,
+    index: Option<usize>,
+    path: &Path,
+    scaling: Scaling,
+) -> Result<()> {
     let path_str = path.to_string_lossy();
     let wide = crate::util::to_wide(&path_str);
-    let dw = desktop()?;
 
     unsafe {
         let _ = dw.SetPosition(position_for(scaling));
@@ -78,9 +112,38 @@ pub fn set_wallpaper(index: Option<usize>, path: &Path, scaling: Scaling) -> Res
     Ok(())
 }
 
-/// Reads the current wallpaper for a monitor (or the desktop-wide one).
-pub fn get_wallpaper(index: Option<usize>) -> Result<String> {
+/// Applies a static image to one monitor (by index) or to every monitor.
+///
+/// Kept for the CLI: prefer [`set_wallpaper_for`], which resolves the screen by
+/// its stable identity.
+pub fn set_wallpaper(index: Option<usize>, path: &Path, scaling: Scaling) -> Result<()> {
     let dw = desktop()?;
+    apply(&dw, index, path, scaling)
+}
+
+/// Applies a static image to the panel described by `monitor`.
+pub fn set_wallpaper_for(
+    monitor: &MonitorInfo,
+    index_hint: Option<usize>,
+    path: &Path,
+    scaling: Scaling,
+) -> Result<()> {
+    let dw = desktop()?;
+    let Some(index) = monitor_index_for(&dw, monitor).or(index_hint) else {
+        return Err(anyhow!(
+            "monitor {} is not exposed by IDesktopWallpaper",
+            monitor.key
+        ));
+    };
+    log::debug!(
+        "static wallpaper: {} resolved to index {index} ({})",
+        monitor.key,
+        monitor.id
+    );
+    apply(&dw, Some(index), path, scaling)
+}
+
+fn read(dw: &IDesktopWallpaper, index: Option<usize>) -> Result<String> {
     let monitor_id = match index {
         Some(i) => {
             let count = unsafe { dw.GetMonitorDevicePathCount() }.unwrap_or(0);
@@ -108,6 +171,23 @@ pub fn get_wallpaper(index: Option<usize>) -> Result<String> {
         CoTaskMemFree(Some(pw.0 as *const _));
     }
     Ok(value)
+}
+
+/// Reads the current wallpaper for a monitor (or the desktop-wide one).
+pub fn get_wallpaper(index: Option<usize>) -> Result<String> {
+    read(&desktop()?, index)
+}
+
+/// Reads the wallpaper that Windows has for the panel described by `monitor`.
+pub fn get_wallpaper_for(monitor: &MonitorInfo, index_hint: Option<usize>) -> Result<String> {
+    let dw = desktop()?;
+    let Some(index) = monitor_index_for(&dw, monitor).or(index_hint) else {
+        return Err(anyhow!(
+            "monitor {} is not exposed by IDesktopWallpaper",
+            monitor.key
+        ));
+    };
+    read(&dw, Some(index))
 }
 
 /// Number of monitors that Windows exposes to `IDesktopWallpaper`.

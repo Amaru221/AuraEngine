@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::config::{Config, ParentMode};
 use crate::engine::mpv;
-use crate::platform::{host, ipc, win};
+use crate::platform::{host, ipc, static_wallpaper, win};
 use crate::util;
 
 const COMMANDS: &[&str] = &[
@@ -314,19 +314,26 @@ fn print_doctor() {
         ));
     }
     report.push_str(&format!(
-        "Autostart: {}\nMonitors: {}\n",
+        "Autostart: {}\nMonitors: {}\nDesktop wallpaper API monitors: {}\n",
         if win::autostart_enabled() { "enabled" } else { "disabled" },
-        monitors.len()
+        monitors.len(),
+        static_wallpaper::monitor_count()
     ));
     for monitor in &monitors {
+        let identity = if monitor.id.is_empty() {
+            "unresolved".to_string()
+        } else {
+            monitor.id.clone()
+        };
         report.push_str(&format!(
-            "  {} | {} | {}x{} @ {}dpi | {}\n",
+            "  {} | {} | {}x{} @ {}dpi | {} | id {}\n",
             monitor.key,
             monitor.label(),
             monitor.rect.width(),
             monitor.rect.height(),
             monitor.dpi,
-            if monitor.primary { "primary" } else { "secondary" }
+            if monitor.primary { "primary" } else { "secondary" },
+            identity
         ));
     }
     report.push_str("Desktop layers:\n");

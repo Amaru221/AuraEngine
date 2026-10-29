@@ -99,7 +99,7 @@ impl AuraApp {
             painter.rect_filled(rect, 8, Color32::from_rgb(18, 20, 28));
 
             // Wallpaper preview.
-            let assignment = self.cfg.assignment_for(&monitor.key).cloned();
+            let assignment = self.assignment_for_monitor(monitor).cloned();
             let mut drew_preview = false;
             if let Some(assignment) = &assignment {
                 if !assignment.thumb_key.is_empty() {
@@ -276,7 +276,7 @@ impl AuraApp {
                             .size(11.0)
                             .color(theme::muted()),
                     );
-                    let current = self.cfg.assignment_for(&monitor.key).cloned();
+                    let current = self.assignment_for_monitor(monitor).cloned();
                     match current {
                         Some(assignment) => {
                             ui.label(
@@ -307,11 +307,7 @@ impl AuraApp {
                             .monitor_scaling
                             .get(&monitor.key)
                             .copied()
-                            .or_else(|| {
-                                self.cfg
-                                    .assignment_for(&monitor.key)
-                                    .map(|a| a.scaling)
-                            })
+                            .or_else(|| self.assignment_for_monitor(monitor).map(|a| a.scaling))
                             .unwrap_or(Scaling::Fill);
                         let mut scaling = previous;
 

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::platform::win::MonitorInfo;
 use crate::util;
 
 pub const CURRENT_VERSION: u32 = 1;
@@ -185,6 +186,12 @@ pub struct Assignment {
     /// on every frame.
     #[serde(default)]
     pub thumb_key: String,
+    /// Stable identity of the physical panel (`MonitorInfo::id`). Windows
+    /// renumbers device names (`\\.\DISPLAY1` -> `\\.\DISPLAY6`) after a GPU
+    /// driver update, so the identity is what allows the assignment to follow
+    /// the screen. Empty for configurations written before this field existed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub monitor_id: String,
 }
 
 impl Assignment {
@@ -195,6 +202,7 @@ impl Assignment {
             kind,
             scaling,
             thumb_key: String::new(),
+            monitor_id: String::new(),
         }
     }
 }
@@ -361,6 +369,100 @@ impl Config {
         self.assignments.remove(monitor_key);
     }
 
+    /// Re-links per-monitor assignments after Windows changes the display
+    /// device names.
+    ///
+    /// `\\.\DISPLAYn` is assigned by the OS and changes when a GPU driver is
+    /// updated/reinstalled, a monitor is moved to another port or a dock is
+    /// connected. The physical panel keeps its PnP identity, so assignments
+    /// saved with that identity are moved to the current device name instead
+    /// of being forgotten. Returns `true` when the configuration changed and
+    /// needs to be saved.
+    pub fn reconcile_monitors(&mut self, monitors: &[MonitorInfo]) -> bool {
+        let mut changed = false;
+        let current_keys: BTreeMap<&str, &MonitorInfo> = monitors
+            .iter()
+            .map(|monitor| (monitor.key.as_str(), monitor))
+            .collect();
+
+        // Existing assignments for a connected screen learn its identity.
+        for monitor in monitors {
+            if monitor.id.is_empty() {
+                continue;
+            }
+            if let Some(assignment) = self.assignments.get_mut(&monitor.key) {
+                if assignment.monitor_id.is_empty() {
+                    assignment.monitor_id = monitor.id.clone();
+                    changed = true;
+                }
+            }
+        }
+
+        // Move an assignment saved under a previous device name to the device
+        // name that currently drives the same panel.
+        for monitor in monitors {
+            if monitor.id.is_empty() || self.assignments.contains_key(&monitor.key) {
+                continue;
+            }
+            let stale = self
+                .assignments
+                .iter()
+                .find(|(key, assignment)| {
+                    !current_keys.contains_key(key.as_str())
+                        && key.as_str() != "*"
+                        && !assignment.monitor_id.is_empty()
+                        && assignment.monitor_id.eq_ignore_ascii_case(&monitor.id)
+                })
+                .map(|(key, _)| key.clone());
+            let Some(stale) = stale else {
+                continue;
+            };
+            if let Some(mut assignment) = self.assignments.remove(&stale) {
+                assignment.monitor_id = monitor.id.clone();
+                log::info!(
+                    "assignment {stale} re-linked to {} ({})",
+                    monitor.key,
+                    monitor.id
+                );
+                self.assignments.insert(monitor.key.clone(), assignment);
+                if let Some(original) = self.originals.remove(&stale) {
+                    self.originals.insert(monitor.key.clone(), original);
+                }
+                changed = true;
+            }
+        }
+
+        // Drop leftovers for a panel that is already assigned to a connected
+        // device name. Two keys for one screen would draw two display numbers
+        // and create duplicate hosts.
+        let mut live: BTreeMap<&str, &str> = BTreeMap::new();
+        for monitor in monitors {
+            if !monitor.id.is_empty() && self.assignments.contains_key(&monitor.key) {
+                live.entry(monitor.id.as_str())
+                    .or_insert(monitor.key.as_str());
+            }
+        }
+        let duplicates: Vec<String> = self
+            .assignments
+            .iter()
+            .filter(|(key, assignment)| {
+                key.as_str() != "*"
+                    && !current_keys.contains_key(key.as_str())
+                    && !assignment.monitor_id.is_empty()
+                    && live.contains_key(assignment.monitor_id.as_str())
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in duplicates {
+            log::info!("dropping duplicate assignment for disconnected {key}");
+            self.assignments.remove(&key);
+            self.originals.remove(&key);
+            changed = true;
+        }
+
+        changed
+    }
+
     #[allow(dead_code)]
     pub fn is_favorite(&self, path: &Path) -> bool {
         self.favorites.iter().any(|f| f == path)
@@ -445,6 +547,102 @@ mod tests {
         assert!(cfg.is_favorite(&p));
         cfg.toggle_favorite(&p);
         assert!(!cfg.is_favorite(&p));
+    }
+
+    fn monitor(key: &str, id: &str) -> MonitorInfo {
+        MonitorInfo {
+            key: key.to_string(),
+            id: id.to_string(),
+            name: String::new(),
+            rect: crate::platform::win::RectI {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1080,
+            },
+            work: crate::platform::win::RectI {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1080,
+            },
+            primary: key == r"\\.\DISPLAY6",
+            dpi: 96,
+        }
+    }
+
+    const LG: &str = r"\\?\DISPLAY#GSM5C8A#5&D89A054&1&UID4353";
+    const MSI: &str = r"\\?\DISPLAY#MSI3BA4#5&D89A054&1&UID4352";
+
+    #[test]
+    fn renumbers_follow_the_panel_identity() {
+        let mut cfg = Config::default();
+        let mut video = Assignment::new(PathBuf::from("C:/v.mp4"), Scaling::Fill);
+        video.monitor_id = LG.to_string();
+        cfg.assignments
+            .insert(r"\\.\DISPLAY1".to_string(), video);
+        cfg.originals
+            .insert(r"\\.\DISPLAY1".to_string(), "C:/old.jpg".to_string());
+
+        let monitors = vec![monitor(r"\\.\DISPLAY6", LG), monitor(r"\\.\DISPLAY7", MSI)];
+        assert!(cfg.reconcile_monitors(&monitors));
+
+        assert!(!cfg.assignments.contains_key(r"\\.\DISPLAY1"));
+        assert_eq!(
+            cfg.assignments[r"\\.\DISPLAY6"].path,
+            PathBuf::from("C:/v.mp4")
+        );
+        assert_eq!(cfg.originals[r"\\.\DISPLAY6"], "C:/old.jpg");
+        // Already reconciled: nothing left to do.
+        assert!(!cfg.reconcile_monitors(&monitors));
+    }
+
+    #[test]
+    fn legacy_assignments_learn_their_identity() {
+        let mut cfg = Config::default();
+        cfg.assignments.insert(
+            r"\\.\DISPLAY6".to_string(),
+            Assignment::new(PathBuf::from("C:/a.jpg"), Scaling::Fill),
+        );
+        let monitors = vec![monitor(r"\\.\DISPLAY6", LG)];
+        assert!(cfg.reconcile_monitors(&monitors));
+        assert_eq!(cfg.assignments[r"\\.\DISPLAY6"].monitor_id, LG);
+        assert!(!cfg.reconcile_monitors(&monitors));
+    }
+
+    #[test]
+    fn duplicate_keys_for_one_panel_are_dropped() {
+        let mut cfg = Config::default();
+        cfg.assignments.insert(
+            r"\\.\DISPLAY6".to_string(),
+            Assignment::new(PathBuf::from("C:/a.jpg"), Scaling::Fill),
+        );
+        let mut stale = Assignment::new(PathBuf::from("C:/b.jpg"), Scaling::Fill);
+        stale.monitor_id = LG.to_string();
+        cfg.assignments.insert(r"\\.\DISPLAY1".to_string(), stale);
+
+        let monitors = vec![monitor(r"\\.\DISPLAY6", LG)];
+        assert!(cfg.reconcile_monitors(&monitors));
+        assert!(!cfg.assignments.contains_key(r"\\.\DISPLAY1"));
+        assert_eq!(
+            cfg.assignments[r"\\.\DISPLAY6"].path,
+            PathBuf::from("C:/a.jpg")
+        );
+    }
+
+    #[test]
+    fn disconnected_panels_keep_their_assignment() {
+        // An unplugged screen must still get its wallpaper back when it
+        // returns; only entries that can be re-linked are touched.
+        let mut cfg = Config::default();
+        let mut away = Assignment::new(PathBuf::from("C:/away.jpg"), Scaling::Fill);
+        away.monitor_id = MSI.to_string();
+        cfg.assignments
+            .insert(r"\\.\DISPLAY2".to_string(), away);
+
+        let monitors = vec![monitor(r"\\.\DISPLAY6", LG)];
+        assert!(!cfg.reconcile_monitors(&monitors));
+        assert!(cfg.assignments.contains_key(r"\\.\DISPLAY2"));
     }
 }
 
