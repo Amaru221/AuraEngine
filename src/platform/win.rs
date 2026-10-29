@@ -143,6 +143,10 @@ pub struct MonitorInfo {
     /// Stable PnP identity of the panel (see [`normalize_monitor_identity`]).
     /// Empty when it cannot be resolved.
     pub id: String,
+    /// 1-based position in the deterministic [`monitors`] order. The UI shows
+    /// this value (`Pantalla 1`, badges `1`, `2`…), so the numbering is always
+    /// `1..=N` and never the volatile `\\.\DISPLAYn` suffix.
+    pub ordinal: u32,
     /// Friendly adapter/monitor name when available.
     pub name: String,
     pub rect: RectI,
@@ -156,8 +160,11 @@ impl MonitorInfo {
         format!("{}x{}", self.rect.width(), self.rect.height())
     }
 
-    /// Windows display number (1 for `\\.\DISPLAY1`), matching the numbers
-    /// shown by Windows Settings -> Display -> Identify.
+    /// Windows display number (1 for `\\.\DISPLAY1`), the raw device suffix.
+    ///
+    /// Kept for diagnostics and legacy configuration parsing. The UI numbers
+    /// screens with [`MonitorInfo::ordinal`] instead, because the suffix can
+    /// grow (or be reused by another panel) after a driver update.
     pub fn number(&self) -> Option<u32> {
         display_number(&self.key)
     }
@@ -254,6 +261,7 @@ unsafe extern "system" fn monitor_enum_proc(
 
         ctx.monitors.push(MonitorInfo {
             id: monitor_identity(&info.szDevice),
+            ordinal: 0,
             key,
             name: friendly,
             rect: RectI::from_rect(info.monitorInfo.rcMonitor),
@@ -293,6 +301,10 @@ pub fn monitors() -> Vec<MonitorInfo> {
     // Deterministic order: primary first, then left to right, top to bottom.
     ctx.monitors
         .sort_by_key(|monitor| (!monitor.primary, monitor.rect.left, monitor.rect.top));
+    // Contiguous UI numbering (1..=N). Internal keys/identities are unchanged.
+    for (index, monitor) in ctx.monitors.iter_mut().enumerate() {
+        monitor.ordinal = index as u32 + 1;
+    }
     ctx.monitors
 }
 
@@ -797,6 +809,7 @@ mod tests {
         MonitorInfo {
             key: key.to_string(),
             id: String::new(),
+            ordinal: 0,
             name: String::new(),
             rect: RectI { left: 0, top: 0, right: 1920, bottom: 1080 },
             work: RectI { left: 0, top: 0, right: 1920, bottom: 1080 },

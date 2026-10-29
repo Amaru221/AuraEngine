@@ -287,8 +287,8 @@ fn assigned_display_numbers(
         if assignment.path.as_path() != path {
             continue;
         }
-        if let Some(number) = monitor.number() {
-            numbers.push(number);
+        if monitor.ordinal > 0 {
+            numbers.push(monitor.ordinal);
         }
     }
     numbers.sort_unstable();
@@ -944,12 +944,13 @@ impl AuraApp {
         self.apply_media(path, Some(key));
     }
 
-    /// "Pantalla 1" / "Display 1", using the Windows display number so it
-    /// matches Settings -> Display -> Identify.
+    /// "Pantalla 1" / "Display 1", numbered contiguously over the screens that
+    /// are connected right now.
     pub fn monitor_title(&self, monitor: &win::MonitorInfo) -> String {
-        match monitor.number() {
-            Some(number) => format!("{} {number}", self.strings.display),
-            None => monitor.label(),
+        if monitor.ordinal == 0 {
+            monitor.label()
+        } else {
+            format!("{} {}", self.strings.display, monitor.ordinal)
         }
     }
 
@@ -2019,10 +2020,11 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
-    fn monitor(key: &str) -> MonitorInfo {
+    fn monitor(key: &str, ordinal: u32) -> MonitorInfo {
         MonitorInfo {
             key: key.to_string(),
             id: String::new(),
+            ordinal,
             name: String::new(),
             rect: RectI {
                 left: 0,
@@ -2054,7 +2056,7 @@ mod tests {
             r"\\.\DISPLAY2".to_string(),
             Assignment::new(PathBuf::from("C:/b.jpg"), Scaling::Fill),
         );
-        let monitors = vec![monitor(r"\\.\DISPLAY1"), monitor(r"\\.\DISPLAY2")];
+        let monitors = vec![monitor(r"\\.\DISPLAY1", 1), monitor(r"\\.\DISPLAY2", 2)];
         assert_eq!(
             assigned_display_numbers(&assignments, &monitors, Path::new("C:/a.jpg")),
             vec![1]
@@ -2076,7 +2078,7 @@ mod tests {
             r"\\.\DISPLAY7".to_string(),
             Assignment::new(PathBuf::from("C:/away.jpg"), Scaling::Fill),
         );
-        let monitors = vec![monitor(r"\\.\DISPLAY1"), monitor(r"\\.\DISPLAY2")];
+        let monitors = vec![monitor(r"\\.\DISPLAY1", 1), monitor(r"\\.\DISPLAY2", 2)];
         assert_eq!(
             assigned_display_numbers(&assignments, &monitors, Path::new("C:/both.jpg")),
             vec![1, 2]
@@ -2099,12 +2101,12 @@ mod tests {
         // Saved before the GPU driver update renamed DISPLAY1 -> DISPLAY6.
         assignments.insert(r"\\.\DISPLAY1".to_string(), assignment);
 
-        let mut renumbered = monitor(r"\\.\DISPLAY6");
+        let mut renumbered = monitor(r"\\.\DISPLAY6", 1);
         renumbered.id = LG.to_string();
-        let monitors = vec![renumbered, monitor(r"\\.\DISPLAY7")];
+        let monitors = vec![renumbered, monitor(r"\\.\DISPLAY7", 2)];
         assert_eq!(
             assigned_display_numbers(&assignments, &monitors, Path::new("C:/a.jpg")),
-            vec![6]
+            vec![1]
         );
         // Only the screen that actually has the wallpaper is marked.
         assert!(

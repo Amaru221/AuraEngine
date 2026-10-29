@@ -29,7 +29,7 @@ UI (egui)  ──►  WorkerW (capa del escritorio)  ──►  mpv --wid  ─�
 - **Ventana translúcida** con barra de título propia y opacidad independiente para el contenedor, la barra lateral y la barra de título, con modo vinculado.
 - **Esquinas redondeadas** y cierre completo desde la bandeja (con watchdog si el apagado se bloquea).
 - **Atajos globales** (Ctrl+Alt+…).
-- **Biblioteca local** con miniaturas (mpv extrae el primer fotograma), búsqueda, filtros y favoritos. Las tarjetas de **Biblioteca** indican con badges `1`, `2`… en qué pantalla **conectada** está aplicado cada fondo, incluyendo el caso de una misma imagen en varias pantallas; nunca muestran números de pantallas desconectadas.
+- **Biblioteca local** con miniaturas (mpv extrae el primer fotograma), búsqueda, filtros y favoritos. Las tarjetas de **Biblioteca** indican con badges `1`, `2`… en qué pantalla **conectada** está aplicado cada fondo, incluyendo el caso de una misma imagen en varias pantallas; la numeración es siempre consecutiva (`1..=N`) sobre las pantallas detectadas y nunca muestra números de pantallas desconectadas.
 - **Arranque sin parpadeo**: la ventana se crea invisible, se pinta con la paleta de la app en ambos temas de egui (y en el marco nativo de DWM) y se limpia con el fondo opaco hasta un frame después de mostrarse. Windows tampoco puede pintar su marco estándar al activar la ventana (Alt+Tab, minimizar/restaurar o volver desde la bandeja), evitando el destello blanco incluso con Windows en modo claro.
 - **Catálogos online**: Wallhaven, Bing Daily, **MotionBGS** (live wallpapers 4K/1080p) y Pexels (clave opcional).
 - **Tema dinámico**: extrae el color dominante del fondo y adapta la interfaz; opcionalmente tiñe el acento de Windows (best-effort).
@@ -284,7 +284,7 @@ $p.Refresh()
 El ejecutable está firmado con un certificado autofirmado. Usa `install.ps1 -TrustCertificate` o compila desde el código.
 
 **Tras actualizar el driver de la GPU aparecen números de pantalla de más o se pierden los fondos**
-Windows renumera los dispositivos (`\\.\DISPLAY1` → `\\.\DISPLAY6`) al actualizar el driver. Aura guarda la identidad del panel y revincula la asignación a la pantalla correcta al arrancar y en cada cambio de topología; las entradas de pantallas que ya no existen se ignoran en la Biblioteca y en Pantallas. Si la configuración era anterior a este cambio, vuelve a aplicar el fondo una vez: a partir de ahí la asignación seguirá al monitor. `aura doctor` muestra la identidad de cada pantalla y cuántas rutas ve `IDesktopWallpaper` (puede conservar monitores fantasma del driver anterior).
+Windows renumera los dispositivos (`\\.\DISPLAY1` → `\\.\DISPLAY6`) al actualizar el driver. Aura guarda la identidad del panel y revincula la asignación a la pantalla correcta al arrancar y en cada cambio de topología; las entradas de pantallas que ya no existen se ignoran en la Biblioteca y en Pantallas. La interfaz numera siempre las pantallas conectadas como `1..=N` (primaria primero), así que nunca verás un `6` o un `7` suelto porque Windows haya renumerado los dispositivos. Si la configuración era anterior a este cambio, vuelve a aplicar el fondo una vez: a partir de ahí la asignación seguirá al monitor. `aura doctor` muestra la identidad de cada pantalla y cuántas rutas ve `IDesktopWallpaper` (puede conservar monitores fantasma del driver anterior).
 
 ---
 

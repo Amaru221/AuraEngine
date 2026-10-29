@@ -26,6 +26,15 @@ All notable changes to Aura Engine are documented here.
 - `aura doctor` prints each monitor's stable identity and the number of monitors
   exposed by `IDesktopWallpaper`, which makes ghost displays easy to spot.
 
+### Changed
+
+- Screens are now numbered contiguously in the UI (`Pantalla 1`, `Pantalla 2`,
+  Library badges `1`, `2`…) over the monitors that are connected, primary
+  first. The raw Windows device suffix (`\\.\DISPLAY6`) is still used
+  internally for assignments but is no longer shown as the display number, so
+  a driver update can no longer leave the app numbering two screens `6` and
+  `7`.
+
 ## [1.1.1] - 2026-10-28
 
 ### Fixed

@@ -553,6 +553,7 @@ mod tests {
         MonitorInfo {
             key: key.to_string(),
             id: id.to_string(),
+            ordinal: 0,
             name: String::new(),
             rect: crate::platform::win::RectI {
                 left: 0,

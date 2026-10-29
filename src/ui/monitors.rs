@@ -148,19 +148,12 @@ impl AuraApp {
                 StrokeKind::Inside,
             );
 
-            let label = match monitor.number() {
-                Some(number) => format!(
-                    "{} {}  -  {}",
-                    self.strings.display,
-                    number,
-                    monitor.resolution()
-                ),
-                None => format!(
-                    "{}  {}",
-                    crate::ui::library::truncate(&monitor.label(), 18),
-                    monitor.resolution()
-                ),
-            };
+            let label = format!(
+                "{} {}  -  {}",
+                self.strings.display,
+                monitor.ordinal,
+                monitor.resolution()
+            );
             painter.text(
                 rect.center_bottom() + Vec2::new(0.0, 6.0),
                 Align2::CENTER_TOP,
@@ -169,14 +162,14 @@ impl AuraApp {
                 theme::text(),
             );
 
-            // Windows display number, matching Settings -> Display -> Identify.
-            if let Some(number) = monitor.number() {
+            // Contiguous display number (1..=N), matching the card title.
+            if monitor.ordinal > 0 {
                 let badge = rect.left_top() + Vec2::new(17.0, 17.0);
                 painter.circle_filled(badge, 12.0, self.accent);
                 painter.text(
                     badge,
                     Align2::CENTER_CENTER,
-                    number.to_string(),
+                    monitor.ordinal.to_string(),
                     FontId::proportional(12.0),
                     theme::contrast_on(self.accent),
                 );
@@ -232,8 +225,7 @@ impl AuraApp {
                         });
                         ui.label(
                             RichText::new(format!(
-                                "{}  -  {}x{} @ {}  -  {}",
-                                monitor.key,
+                                "{}x{} @ {}  -  {}",
                                 monitor.rect.width(),
                                 monitor.rect.height(),
                                 monitor.dpi,
