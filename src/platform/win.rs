@@ -395,9 +395,9 @@ pub struct DesktopWindowState {
     /// Monitors (`\\.\DISPLAYn` keys) covered by an application running in
     /// fullscreen.
     pub fullscreen_monitors: Vec<String>,
-    /// A normal window covers most of a monitor that is not already fullscreen.
-    /// Kept global: a covered desktop pauses every screen, as before.
-    pub occluded: bool,
+    /// Monitors covered by a large normal window. Pausing is scoped to those
+    /// monitors: a window on one screen must not stop the wallpaper on another.
+    pub occluded_monitors: Vec<String>,
 }
 
 /// Keys of the monitors covered by a fullscreen window, out of the window
@@ -417,22 +417,27 @@ fn monitors_covered_by(windows: &[RectI], monitors: &[MonitorInfo]) -> Vec<Strin
     found
 }
 
-/// True when a large window sits on a monitor that is not already paused by a
-/// fullscreen app. Windows behind a fullscreen app must not pause the other
-/// screens: the fullscreen monitor is handled by the per-monitor pause.
-fn occluded_outside_fullscreen(
+/// Keys of the monitors mostly covered by a normal window, excluding the
+/// monitors already paused by a fullscreen app. Windows behind a fullscreen app
+/// must not pause the other screens.
+fn monitors_occluded_by(
     windows: &[RectI],
     monitors: &[MonitorInfo],
     fullscreen: &[String],
-) -> bool {
-    monitors
+) -> Vec<String> {
+    let mut found: Vec<String> = monitors
         .iter()
         .filter(|monitor| !fullscreen.iter().any(|key| key == &monitor.key))
-        .any(|monitor| {
+        .filter(|monitor| {
             windows
                 .iter()
                 .any(|window| covers_most_of_monitor(window, &monitor.rect))
         })
+        .map(|monitor| monitor.key.clone())
+        .collect();
+    found.sort();
+    found.dedup();
+    found
 }
 
 struct WindowEnumCtx {
@@ -492,7 +497,7 @@ pub fn desktop_window_state(monitors: &[MonitorInfo], check_occlusion: bool) -> 
 
     let mut state = DesktopWindowState {
         fullscreen_monitors: monitors_covered_by(&ctx.windows, monitors),
-        occluded: false,
+        occluded_monitors: Vec::new(),
     };
 
     // Exclusive fullscreen games can hide their top-level window while the
@@ -506,8 +511,8 @@ pub fn desktop_window_state(monitors: &[MonitorInfo], check_occlusion: bool) -> 
     }
 
     if check_occlusion {
-        state.occluded =
-            occluded_outside_fullscreen(&ctx.windows, monitors, &state.fullscreen_monitors);
+        state.occluded_monitors =
+            monitors_occluded_by(&ctx.windows, monitors, &state.fullscreen_monitors);
     }
     state
 }
@@ -996,27 +1001,27 @@ mod tests {
         let behind = rect(1920, 0, 3840, 1040);
         let fullscreen_keys = super::monitors_covered_by(&[fullscreen], &monitors);
 
-        // The game pauses screen 2, but the window behind it must not pause
-        // screen 1 through the global occlusion check.
-        assert!(!super::occluded_outside_fullscreen(
+        // The game pauses screen 2; the window behind it must not pause screen
+        // 1 through the occlusion check.
+        assert!(super::monitors_occluded_by(
             &[fullscreen, behind],
             &monitors,
             &fullscreen_keys
-        ));
+        )
+        .is_empty());
 
-        // A large window on screen 1 still counts as a covered desktop.
+        // A large window on screen 1 only occludes screen 1.
         let covered_one = rect(0, 0, 1920, 1050);
-        assert!(super::occluded_outside_fullscreen(
-            &[fullscreen, covered_one],
-            &monitors,
-            &fullscreen_keys
-        ));
+        assert_eq!(
+            super::monitors_occluded_by(&[fullscreen, covered_one], &monitors, &fullscreen_keys),
+            vec![r"\\.\DISPLAY1".to_string()]
+        );
 
-        // Without a fullscreen app the same maximized window occludes.
-        assert!(super::occluded_outside_fullscreen(
-            &[behind],
-            &monitors,
-            &[]
-        ));
+        // Without a fullscreen app the maximized window occludes only its own
+        // screen, so the other wallpaper keeps playing.
+        assert_eq!(
+            super::monitors_occluded_by(&[behind], &monitors, &[]),
+            vec![r"\\.\DISPLAY2".to_string()]
+        );
     }
 }

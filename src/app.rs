@@ -391,7 +391,8 @@ impl AuraApp {
                 let env = PauseEnv {
                     fullscreen: !state.fullscreen_monitors.is_empty(),
                     fullscreen_monitors: state.fullscreen_monitors,
-                    occluded: state.occluded,
+                    occluded: !state.occluded_monitors.is_empty(),
+                    occluded_monitors: state.occluded_monitors,
                     battery: flags & PAUSE_BATTERY != 0 && win::on_battery(),
                 };
                 let _ = pause_tx.try_send(env);

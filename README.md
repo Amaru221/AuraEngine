@@ -19,8 +19,8 @@ UI (egui)  ──►  WorkerW (capa del escritorio)  ──►  mpv --wid  ─�
 - **Fondos estáticos nativos** con `IDesktopWallpaper`, incluido restaurado del fondo original.
 - **Auto-pausa inteligente**:
   - juegos/apps D3D a pantalla completa (`SHQueryUserNotificationState` + enumeración de ventanas): **solo se pausa la pantalla ocupada**, las demás siguen animándose,
-  - escritorio cubierto por ventanas (oclusión real enumerando ventanas),
-  - batería (`GetSystemPowerStatus`).
+  - escritorio cubierto por ventanas (oclusión real enumerando ventanas): **solo la pantalla tapada**,
+  - batería (`GetSystemPowerStatus`, global).
 - **Audio**: volumen y mute por IPC de mpv.
 - **Selector rápido (HUD)** con tres estilos: cuadrícula, cinematográfico y dock. Navegación con teclado, rueda y ratón.
 - **Bandeja del sistema** con menú completo.
@@ -231,7 +231,7 @@ La búsqueda por texto es global; al escribir una búsqueda se vuelve a la categ
 2. **Capa del escritorio**: se envía `0x052C` a `Progman` para que Explorer cree la capa `WorkerW`; la ventana se reparenta a esa capa (en Windows 11 24H2+ suele ser un `WorkerW` hijo de `Progman`).
 3. **mpv embebido**: se lanza `mpv.exe --wid=<HWND>` con `--loop-file=inf`, `--no-config` y `--input-ipc-server=\\.\pipe\aura-…`.
 4. **IPC**: comandos JSON por named pipe. La conexión y el escritor corren en hilos aparte, así que la UI nunca espera a mpv.
-5. **Pausa**: un hilo independiente consulta fullscreen, oclusión y batería en una sola enumeración de ventanas; la UI solo aplica el último estado. La pausa por fullscreen se aplica **por pantalla**: cada instancia de mpv solo se detiene si una app a pantalla completa cubre su monitor, y las ventanas que quedan detrás de ese fullscreen no cuentan como oclusión (la oclusión del resto de pantallas y la batería siguen siendo globales).
+5. **Pausa**: un hilo independiente consulta fullscreen, oclusión y batería en una sola enumeración de ventanas; la UI solo aplica el último estado. Fullscreen y oclusión se aplican **por pantalla**: cada instancia de mpv solo se detiene si una app a pantalla completa o una ventana grande cubre su monitor, y las ventanas que quedan detrás de ese fullscreen no cuentan como oclusión. La batería sigue siendo global.
 6. **Estáticos**: se aplican con `IDesktopWallpaper::SetWallpaper` una sola vez. El monitor se localiza por la identidad PnP del panel (las rutas de `IDesktopWallpaper` no comparten el orden de `EnumDisplayMonitors` y pueden incluir pantallas fantasma). No se recrean hosts ni se reaplican, evitando el bucle con `WorkerW`.
 
 ### Por qué no se reutilizó `mpvpaper`
@@ -264,7 +264,7 @@ Ajustes → Rendimiento → *Modo de composición* → **Progman**. Vuelve a apl
 Ajustes → Motor: comprueba que mpv está detectado. Usa *Descargar mpv* o indica un `mpv.exe`. Revisa `%LOCALAPPDATA%\Aura\logs\mpv-*.log`.
 
 **El fondo se pausa constantemente**
-Desactiva *Pausar cuando el escritorio está tapado* o *Pausar en juegos a pantalla completa* en Ajustes → Rendimiento. Con la pausa por fullscreen activa solo se detiene el fondo de la pantalla que tiene la app a pantalla completa; el resto sigue reproduciéndose.
+Desactiva *Pausar pantallas tapadas* o *Pausar en juegos a pantalla completa* en Ajustes → Rendimiento. La pausa automática es por pantalla: solo se detiene el fondo de la pantalla cubierta (por una app a pantalla completa o por una ventana maximizada); el resto sigue reproduciéndose.
 
 **MotionBGS bloquea la búsqueda**
 MotionBGS está detrás de Cloudflare y puede bloquear una IP completa. Si la web tampoco abre en el navegador, Aura mostrará un aviso específico: necesitas una VPN o un proxy con otra IP. No se reintenta automáticamente para no empeorar el bloqueo. Los resultados ya cargados se guardan en caché durante 20 minutos; **Actualizar** y **Reintentar** sí consultan el sitio de nuevo.

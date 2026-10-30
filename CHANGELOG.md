@@ -6,15 +6,20 @@ All notable changes to Aura Engine are documented here.
 
 ### Changed
 
-- Fullscreen auto-pause is now per monitor. A fullscreen game or video only
-  pauses the animated wallpaper on the screen it covers; the other screens keep
-  playing. Two fullscreen apps pause both screens, and closing them resumes the
-  affected wallpaper. Occlusion and battery pauses remain global, and games keep
-  the performance pause on their own screen. Exclusive fullscreen apps whose
-  window cannot be enumerated fall back to pausing every screen, as before.
+- Auto-pause is now per monitor. A fullscreen game or video only pauses the
+  animated wallpaper on the screen it covers; the other screens keep playing.
+  Two fullscreen apps pause both screens, and closing them resumes the affected
+  wallpaper. The "desktop covered" (occlusion) pause works the same way: a
+  maximized window on one screen no longer freezes the wallpaper on another.
+  Occlusion and fullscreen are classified from a single window enumeration, and
+  windows sitting behind a fullscreen app do not count as occlusion. Battery
+  remains global. Exclusive fullscreen apps whose window cannot be enumerated
+  fall back to pausing every screen, as before.
 - The playback status in the sidebar only reports "paused" when every running
   wallpaper is paused, so a game on one screen no longer makes the other
   (still animated) screen look paused.
+- Resuming playback while an auto-pause condition is active is remembered per
+  monitor (and globally for battery) until that condition disappears.
 
 ## [1.1.2] - 2026-10-29
 
