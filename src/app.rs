@@ -381,12 +381,17 @@ impl AuraApp {
                 std::thread::sleep(Duration::from_millis(700));
                 let flags = watcher_flags.load(Ordering::Relaxed);
                 // Fullscreen is always measured because it also suspends the
-                // global shortcuts; occlusion/battery are config-gated.
+                // global shortcuts; occlusion is config-gated. Both checks
+                // share a single window enumeration.
                 let monitors = win::monitors();
+                let state = win::desktop_window_state(
+                    &monitors,
+                    flags & PAUSE_OCCLUSION != 0,
+                );
                 let env = PauseEnv {
-                    fullscreen: win::is_fullscreen_app_on(&monitors),
-                    occluded: flags & PAUSE_OCCLUSION != 0
-                        && win::any_occluded(&monitors),
+                    fullscreen: !state.fullscreen_monitors.is_empty(),
+                    fullscreen_monitors: state.fullscreen_monitors,
+                    occluded: state.occluded,
                     battery: flags & PAUSE_BATTERY != 0 && win::on_battery(),
                 };
                 let _ = pause_tx.try_send(env);
@@ -1661,6 +1666,7 @@ impl AuraApp {
             }
             if self.hud_open {
                 env.fullscreen = false;
+                env.fullscreen_monitors.clear();
             }
             self.engine.set_env(env, &self.cfg);
         }

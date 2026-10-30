@@ -1,7 +1,7 @@
 ﻿pub mod installer;
 pub mod mpv;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
@@ -10,14 +10,33 @@ use crate::config::{Config, MediaKind, ParentMode, Scaling};
 use crate::platform::host::WallpaperHosts;
 use crate::platform::win::{self, MonitorInfo};
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct PauseEnv {
+    /// At least one monitor is covered by a fullscreen app. Also drives the
+    /// global-hotkey suspension.
     pub fullscreen: bool,
+    /// Monitor keys (`\\.\DISPLAYn`) covered by a fullscreen app. Empty means
+    /// "none"; when [`PauseEnv::fullscreen`] is set without attribution the
+    /// whole desktop is treated as fullscreen (legacy behaviour).
+    pub fullscreen_monitors: Vec<String>,
+    /// A normal window covers most of any monitor (whole desktop).
     pub occluded: bool,
+    /// The laptop is running on battery (whole desktop).
     pub battery: bool,
 }
 
 impl PauseEnv {
+    /// Auto-pause condition that applies to every monitor.
+    pub fn global_active(&self) -> bool {
+        self.occluded || self.battery
+    }
+
+    /// Fullscreen without a monitor attribution (an exclusive fullscreen app
+    /// whose window cannot be enumerated) pauses every monitor.
+    fn fullscreen_unattributed(&self) -> bool {
+        self.fullscreen && self.fullscreen_monitors.is_empty()
+    }
+
     #[allow(dead_code)]
     pub fn describe(&self) -> String {
         let mut parts = Vec::new();
@@ -38,6 +57,50 @@ impl PauseEnv {
     }
 }
 
+/// Explicit user resumes that must win over the auto-pause conditions until
+/// those conditions disappear. Occlusion/battery are global; fullscreen is
+/// tracked per monitor so resuming on one screen does not keep another
+/// fullscreen screen playing.
+#[derive(Clone, Debug, Default)]
+struct PauseOverrides {
+    monitors: HashSet<String>,
+    global: bool,
+}
+
+impl PauseOverrides {
+    fn paused(&self, env: &PauseEnv, monitor: &str, paused_user: bool) -> bool {
+        if paused_user {
+            return true;
+        }
+        let global = env.global_active() || env.fullscreen_unattributed();
+        let fullscreen = env.fullscreen_monitors.iter().any(|key| key == monitor);
+        (global && !self.global) || (fullscreen && !self.monitors.contains(monitor))
+    }
+
+    /// Records the conditions the user just resumed from.
+    fn record(&mut self, env: &PauseEnv) {
+        self.monitors = env.fullscreen_monitors.iter().cloned().collect();
+        self.global = env.global_active() || env.fullscreen_unattributed();
+    }
+
+    /// Forgets overrides whose condition is no longer active.
+    fn retain_current(&mut self, env: &PauseEnv) {
+        if !(env.global_active() || env.fullscreen_unattributed()) {
+            self.global = false;
+        }
+        self.monitors.retain(|monitor| {
+            env.fullscreen_monitors
+                .iter()
+                .any(|key| key == monitor)
+        });
+    }
+
+    fn clear(&mut self) {
+        self.monitors.clear();
+        self.global = false;
+    }
+}
+
 pub struct Engine {
     hosts: WallpaperHosts,
     instances: HashMap<String, mpv::MpvInstance>,
@@ -46,7 +109,7 @@ pub struct Engine {
     paused_user: bool,
     paused_env: PauseEnv,
     effective_pause: bool,
-    auto_pause_override: bool,
+    overrides: PauseOverrides,
     last_error: Option<String>,
     parent_mode: ParentMode,
 }
@@ -62,7 +125,7 @@ impl Engine {
             paused_user: false,
             paused_env: PauseEnv::default(),
             effective_pause: false,
-            auto_pause_override: false,
+            overrides: PauseOverrides::default(),
             last_error: None,
             parent_mode: ParentMode::Auto,
         }
@@ -201,7 +264,7 @@ impl Engine {
         self.hosts.set_visible(key, true);
 
         let mut instance = mpv::MpvInstance::spawn(&mpv, hwnd, path, key, scaling, volume, muted)?;
-        if self.effective_pause {
+        if self.overrides.paused(&self.paused_env, key, self.paused_user) {
             instance.set_paused(true);
         }
         self.instances.insert(key.to_string(), instance);
@@ -258,12 +321,13 @@ impl Engine {
     pub fn set_user_paused(&mut self, paused: bool) {
         self.paused_user = paused;
         if paused {
-            self.auto_pause_override = false;
+            self.overrides.clear();
         } else {
-            // An explicit resume wins over the current auto-pause condition
-            // (fullscreen game, occlusion, battery). The override is cleared
-            // as soon as the condition disappears.
-            self.auto_pause_override = true;
+            // An explicit resume wins over the current auto-pause conditions
+            // (fullscreen game, occlusion, battery). Fullscreen overrides are
+            // per monitor; global conditions are overridden as a whole. Both
+            // are forgotten as soon as the condition disappears.
+            self.overrides.record(&self.paused_env);
         }
         // Force the write even when the effective state did not change: the
         // user pressed the button, so mpv must receive the command now.
@@ -285,42 +349,52 @@ impl Engine {
     }
 
     pub fn env(&self) -> PauseEnv {
-        self.paused_env
+        self.paused_env.clone()
     }
 
-    pub fn set_env(&mut self, env: PauseEnv, cfg: &Config) {
-        self.paused_env = env;
+    pub fn set_env(&mut self, mut env: PauseEnv, cfg: &Config) {
         if !cfg.pause_on_fullscreen {
-            self.paused_env.fullscreen = false;
+            env.fullscreen = false;
+            env.fullscreen_monitors.clear();
         }
         if !cfg.pause_on_occlusion {
-            self.paused_env.occluded = false;
+            env.occluded = false;
         }
         if !cfg.pause_on_battery {
-            self.paused_env.battery = false;
+            env.battery = false;
         }
+        if env.fullscreen_monitors != self.paused_env.fullscreen_monitors {
+            log::info!(
+                "fullscreen pause on monitors {:?}",
+                env.fullscreen_monitors
+            );
+        }
+        self.paused_env = env;
         self.apply_pause(false);
     }
 
     fn apply_pause(&mut self, force: bool) {
-        let env_active = self.paused_env.fullscreen
-            || self.paused_env.occluded
-            || self.paused_env.battery;
-        if !env_active {
-            self.auto_pause_override = false;
-        }
-        let effective =
-            self.paused_user || (env_active && !self.auto_pause_override);
-        if force || effective != self.effective_pause {
-            self.effective_pause = effective;
-            for instance in self.instances.values_mut() {
-                if force {
-                    instance.set_paused_force(effective);
-                } else {
-                    instance.set_paused(effective);
-                }
+        self.overrides.retain_current(&self.paused_env);
+        let paused_user = self.paused_user;
+        let overrides = &self.overrides;
+        let env = &self.paused_env;
+        let mut running = 0usize;
+        let mut all_paused = true;
+        for (key, instance) in self.instances.iter_mut() {
+            let paused = overrides.paused(env, key, paused_user);
+            if force {
+                instance.set_paused_force(paused);
+            } else {
+                instance.set_paused(paused);
             }
+            running += 1;
+            all_paused &= paused;
         }
+        // Aggregate state for the UI: playback counts as paused only when the
+        // user paused it or every running wallpaper is paused. A fullscreen app
+        // on one screen must not make the other (still animated) screen look
+        // paused.
+        self.effective_pause = paused_user || (running > 0 && all_paused);
     }
 
     pub fn running(&self) -> Vec<(String, PathBuf, bool)> {
@@ -336,6 +410,111 @@ impl Engine {
     pub fn running_count(&self) -> usize {
         self.instances.len()
     }
+}
 
+#[cfg(test)]
+mod tests {
+    use super::{PauseEnv, PauseOverrides};
 
+    fn fullscreen_on(keys: &[&str]) -> PauseEnv {
+        PauseEnv {
+            fullscreen: true,
+            fullscreen_monitors: keys.iter().map(|key| key.to_string()).collect(),
+            ..PauseEnv::default()
+        }
+    }
+
+    fn paused(env: &PauseEnv, monitor: &str, paused_user: bool) -> bool {
+        PauseOverrides::default().paused(env, monitor, paused_user)
+    }
+
+    #[test]
+    fn fullscreen_only_pauses_the_covered_monitors() {
+        let env = fullscreen_on(&[r"\\.\DISPLAY2"]);
+        assert!(!paused(&env, r"\\.\DISPLAY1", false));
+        assert!(paused(&env, r"\\.\DISPLAY2", false));
+    }
+
+    #[test]
+    fn fullscreen_on_every_monitor_pauses_every_monitor() {
+        let env = fullscreen_on(&[r"\\.\DISPLAY1", r"\\.\DISPLAY2"]);
+        assert!(paused(&env, r"\\.\DISPLAY1", false));
+        assert!(paused(&env, r"\\.\DISPLAY2", false));
+    }
+
+    #[test]
+    fn no_fullscreen_pauses_nothing() {
+        let env = PauseEnv::default();
+        assert!(!env.fullscreen && !env.global_active());
+        assert!(!paused(&env, r"\\.\DISPLAY1", false));
+        assert!(!paused(&env, r"\\.\DISPLAY2", false));
+    }
+
+    #[test]
+    fn global_conditions_still_pause_every_monitor() {
+        for env in [
+            PauseEnv {
+                occluded: true,
+                ..PauseEnv::default()
+            },
+            PauseEnv {
+                battery: true,
+                ..PauseEnv::default()
+            },
+        ] {
+            assert!(paused(&env, r"\\.\DISPLAY1", false));
+            assert!(paused(&env, r"\\.\DISPLAY2", false));
+        }
+    }
+
+    #[test]
+    fn manual_pause_wins_over_the_environment() {
+        let env = fullscreen_on(&[r"\\.\DISPLAY2"]);
+        assert!(paused(&env, r"\\.\DISPLAY1", true));
+        assert!(paused(&env, r"\\.\DISPLAY2", true));
+    }
+
+    #[test]
+    fn resume_override_is_per_monitor() {
+        let env = fullscreen_on(&[r"\\.\DISPLAY2"]);
+        // The user resumed playback while DISPLAY2 was fullscreen: only that
+        // screen is overridden.
+        let mut overrides = PauseOverrides::default();
+        overrides.record(&env);
+        assert!(!overrides.paused(&env, r"\\.\DISPLAY2", false));
+        assert!(!overrides.paused(&env, r"\\.\DISPLAY1", false));
+
+        // A new fullscreen app on DISPLAY1 must still pause it.
+        let both = fullscreen_on(&[r"\\.\DISPLAY1", r"\\.\DISPLAY2"]);
+        overrides.retain_current(&both);
+        assert!(overrides.paused(&both, r"\\.\DISPLAY1", false));
+        assert!(!overrides.paused(&both, r"\\.\DISPLAY2", false));
+
+        // Once the game closes the override is forgotten.
+        let none = PauseEnv::default();
+        overrides.retain_current(&none);
+        assert!(!overrides.paused(&none, r"\\.\DISPLAY2", false));
+        // A later fullscreen app on that screen pauses it again.
+        let later = fullscreen_on(&[r"\\.\DISPLAY2"]);
+        assert!(overrides.paused(&later, r"\\.\DISPLAY2", false));
+    }
+
+    #[test]
+    fn unattributed_fullscreen_falls_back_to_every_monitor() {
+        // SHQueryUserNotificationState reported a fullscreen app but no window
+        // could be attributed (exclusive fullscreen / hidden window).
+        let env = PauseEnv {
+            fullscreen: true,
+            fullscreen_monitors: Vec::new(),
+            ..PauseEnv::default()
+        };
+        assert!(paused(&env, r"\\.\DISPLAY1", false));
+        assert!(paused(&env, r"\\.\DISPLAY2", false));
+
+        // And an explicit resume covers it as a global condition.
+        let mut overrides = PauseOverrides::default();
+        overrides.record(&env);
+        assert!(!overrides.paused(&env, r"\\.\DISPLAY1", false));
+        assert!(!overrides.paused(&env, r"\\.\DISPLAY2", false));
+    }
 }

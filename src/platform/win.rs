@@ -364,33 +364,162 @@ pub fn is_fullscreen_app() -> bool {
 
 /// Same as [`is_fullscreen_app`], reusing an existing monitor snapshot.
 pub fn is_fullscreen_app_on(monitors: &[MonitorInfo]) -> bool {
-    unsafe {
-        let state = SHQueryUserNotificationState().unwrap_or(QUNS_NOT_PRESENT);
-        if state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_BUSY {
-            return true;
-        }
+    !fullscreen_monitors(monitors).is_empty()
+}
 
-        let fg = GetForegroundWindow();
-        if fg.is_invalid() {
-            return false;
+/// Fraction of a monitor that must be covered by a window for it to count as
+/// fullscreen on that monitor. Borderless windows are often a few pixels larger
+/// than the monitor and maximized windows exceed the work area by the frame
+/// size, so an exact match is too strict; a normal window on a monitor with a
+/// taskbar stays below this threshold.
+const FULLSCREEN_COVERAGE: f64 = 0.995;
+
+/// Fraction of a monitor that must be covered by a window to count as
+/// "desktop covered" (the occlusion pause).
+const OCCLUSION_COVERAGE: f64 = 0.90;
+
+fn covers_monitor(window: &RectI, monitor: &RectI) -> bool {
+    !monitor.is_empty()
+        && window.intersects(monitor) as f64 >= (monitor.area() as f64) * FULLSCREEN_COVERAGE
+}
+
+fn covers_most_of_monitor(window: &RectI, monitor: &RectI) -> bool {
+    !monitor.is_empty()
+        && window.intersects(monitor) as f64 >= (monitor.area() as f64) * OCCLUSION_COVERAGE
+}
+
+/// Fullscreen and occlusion state of the desktop, computed from a single
+/// `EnumWindows` pass (both checks enumerate the same windows).
+#[derive(Clone, Debug, Default)]
+pub struct DesktopWindowState {
+    /// Monitors (`\\.\DISPLAYn` keys) covered by an application running in
+    /// fullscreen.
+    pub fullscreen_monitors: Vec<String>,
+    /// A normal window covers most of a monitor that is not already fullscreen.
+    /// Kept global: a covered desktop pauses every screen, as before.
+    pub occluded: bool,
+}
+
+/// Keys of the monitors covered by a fullscreen window, out of the window
+/// rectangles captured by [`desktop_window_state`].
+fn monitors_covered_by(windows: &[RectI], monitors: &[MonitorInfo]) -> Vec<String> {
+    let mut found: Vec<String> = monitors
+        .iter()
+        .filter(|monitor| {
+            windows
+                .iter()
+                .any(|window| covers_monitor(window, &monitor.rect))
+        })
+        .map(|monitor| monitor.key.clone())
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// True when a large window sits on a monitor that is not already paused by a
+/// fullscreen app. Windows behind a fullscreen app must not pause the other
+/// screens: the fullscreen monitor is handled by the per-monitor pause.
+fn occluded_outside_fullscreen(
+    windows: &[RectI],
+    monitors: &[MonitorInfo],
+    fullscreen: &[String],
+) -> bool {
+    monitors
+        .iter()
+        .filter(|monitor| !fullscreen.iter().any(|key| key == &monitor.key))
+        .any(|monitor| {
+            windows
+                .iter()
+                .any(|window| covers_most_of_monitor(window, &monitor.rect))
+        })
+}
+
+struct WindowEnumCtx {
+    windows: Vec<RectI>,
+    own_pid: u32,
+}
+
+unsafe extern "system" fn window_enum_proc(hwnd: HWND, data: LPARAM) -> BOOL {
+    let ctx = unsafe { &mut *(data.0 as *mut WindowEnumCtx) };
+    unsafe {
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return TRUE;
         }
         let mut pid = 0u32;
-        GetWindowThreadProcessId(fg, Some(&mut pid));
-        if pid == std::process::id() {
-            return false;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == ctx.own_pid || is_shell_window(hwnd) {
+            return TRUE;
         }
-        if is_shell_window(fg) {
-            return false;
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        if ex_style & WS_EX_TOOLWINDOW.0 != 0 {
+            return TRUE;
+        }
+        // Windows on another virtual desktop (or suspended UWP apps) are
+        // cloaked: they are not on screen and must not pause anything.
+        if is_cloaked(hwnd) {
+            return TRUE;
         }
         let mut rect = RECT::default();
-        if GetWindowRect(fg, &mut rect).is_err() {
-            return false;
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return TRUE;
         }
         let rect = RectI::from_rect(rect);
-        monitors
-            .iter()
-            .any(|m| rect.intersects(&m.rect) as f64 >= (m.rect.area() as f64) * 0.995)
+        if !rect.is_empty() {
+            ctx.windows.push(rect);
+        }
     }
+    TRUE
+}
+
+/// Fullscreen and occlusion state for the given monitors.
+///
+/// All top-level windows are checked in a single enumeration, so two games on
+/// two screens pause both screens and a game on one screen leaves the other
+/// animated wallpaper playing. `check_occlusion` skips the (more expensive)
+/// occlusion classification when the setting is disabled.
+pub fn desktop_window_state(monitors: &[MonitorInfo], check_occlusion: bool) -> DesktopWindowState {
+    if monitors.is_empty() {
+        return DesktopWindowState::default();
+    }
+    let mut ctx = WindowEnumCtx {
+        windows: Vec::new(),
+        own_pid: std::process::id(),
+    };
+    unsafe {
+        let _ = EnumWindows(Some(window_enum_proc), LPARAM(&mut ctx as *mut _ as isize));
+    }
+
+    let mut state = DesktopWindowState {
+        fullscreen_monitors: monitors_covered_by(&ctx.windows, monitors),
+        occluded: false,
+    };
+
+    // Exclusive fullscreen games can hide their top-level window while the
+    // shell still reports a D3D fullscreen app. Without a window we cannot tell
+    // which screen is busy, so fall back to pausing every screen (the previous
+    // global behaviour) instead of losing the performance pause entirely.
+    if state.fullscreen_monitors.is_empty() && shell_reports_fullscreen() {
+        state.fullscreen_monitors = monitors.iter().map(|m| m.key.clone()).collect();
+        state.fullscreen_monitors.sort();
+        state.fullscreen_monitors.dedup();
+    }
+
+    if check_occlusion {
+        state.occluded =
+            occluded_outside_fullscreen(&ctx.windows, monitors, &state.fullscreen_monitors);
+    }
+    state
+}
+
+/// Monitors covered by a fullscreen application.
+pub fn fullscreen_monitors(monitors: &[MonitorInfo]) -> Vec<String> {
+    desktop_window_state(monitors, false).fullscreen_monitors
+}
+
+fn shell_reports_fullscreen() -> bool {
+    let state = unsafe { SHQueryUserNotificationState() }.unwrap_or(QUNS_NOT_PRESENT);
+    state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_BUSY
 }
 
 fn is_shell_window(hwnd: HWND) -> bool {
@@ -420,78 +549,17 @@ fn window_class(hwnd: HWND) -> String {
     }
 }
 
-struct OcclusionCtx {
-    targets: Vec<RectI>,
-    own_pid: u32,
-    occluded: bool,
-}
-
-unsafe extern "system" fn occlusion_proc(hwnd: HWND, data: LPARAM) -> BOOL {
-    let ctx = unsafe { &mut *(data.0 as *mut OcclusionCtx) };
+fn is_cloaked(hwnd: HWND) -> bool {
+    let mut cloaked = 0u32;
     unsafe {
-        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
-            return TRUE;
-        }
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        if pid == ctx.own_pid || is_shell_window(hwnd) {
-            return TRUE;
-        }
-        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-        if ex_style & WS_EX_TOOLWINDOW.0 != 0 {
-            return TRUE;
-        }
-
-        let mut cloaked = 0u32;
         let _ = DwmGetWindowAttribute(
             hwnd,
             DWMWA_CLOAKED,
             &mut cloaked as *mut _ as *mut _,
             std::mem::size_of::<u32>() as u32,
         );
-        if cloaked != 0 {
-            return TRUE;
-        }
-
-        let mut rect = RECT::default();
-        if GetWindowRect(hwnd, &mut rect).is_err() {
-            return TRUE;
-        }
-        let rect = RectI::from_rect(rect);
-        if rect.is_empty() {
-            return TRUE;
-        }
-        for target in &ctx.targets {
-            let covered = rect.intersects(target);
-            if covered as f64 >= (target.area() as f64) * 0.90 {
-                ctx.occluded = true;
-                return BOOL(0);
-            }
-        }
     }
-    TRUE
-}
-
-/// True when a normal application window covers most of any monitor. All
-/// targets are checked in a single `EnumWindows` pass.
-pub fn any_occluded(monitors: &[MonitorInfo]) -> bool {
-    let targets: Vec<RectI> = monitors
-        .iter()
-        .map(|monitor| monitor.rect)
-        .filter(|rect| !rect.is_empty())
-        .collect();
-    if targets.is_empty() {
-        return false;
-    }
-    let mut ctx = OcclusionCtx {
-        targets,
-        own_pid: std::process::id(),
-        occluded: false,
-    };
-    unsafe {
-        let _ = EnumWindows(Some(occlusion_proc), LPARAM(&mut ctx as *mut _ as isize));
-    }
-    ctx.occluded
+    cloaked != 0
 }
 
 // ---------------------------------------------------------------------------
@@ -843,5 +911,112 @@ mod tests {
             super::normalize_monitor_identity(path)
         );
         assert_eq!(super::normalize_monitor_identity(""), None);
+    }
+
+    fn monitor_at(key: &str, left: i32, top: i32) -> MonitorInfo {
+        let mut info = monitor(key);
+        info.rect = RectI {
+            left,
+            top,
+            right: left + 1920,
+            bottom: top + 1080,
+        };
+        info.work = info.rect;
+        info
+    }
+
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RectI {
+        RectI {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    #[test]
+    fn fullscreen_requires_almost_the_whole_monitor() {
+        let screen = rect(0, 0, 1920, 1080);
+        // Exact borderless fullscreen.
+        assert!(super::covers_monitor(&rect(0, 0, 1920, 1080), &screen));
+        // Maximized windows can overshoot the monitor by their frame size.
+        assert!(super::covers_monitor(&rect(-8, -8, 1928, 1088), &screen));
+        // A normal maximized window on a screen with a taskbar stays below.
+        assert!(!super::covers_monitor(&rect(0, 0, 1920, 1040), &screen));
+        // A window that only covers part of the screen is not fullscreen.
+        assert!(!super::covers_monitor(&rect(0, 0, 960, 1080), &screen));
+        // Empty windows/monitors never match.
+        assert!(!super::covers_monitor(&rect(0, 0, 0, 0), &screen));
+        assert!(!super::covers_monitor(&rect(0, 0, 1920, 1080), &rect(0, 0, 0, 0)));
+    }
+
+    #[test]
+    fn fullscreen_windows_are_attributed_to_their_own_monitor() {
+        let monitors = vec![
+            monitor_at(r"\\.\DISPLAY1", 0, 0),
+            monitor_at(r"\\.\DISPLAY2", 1920, 0),
+        ];
+
+        // Fullscreen on screen 2 only pauses screen 2.
+        assert_eq!(
+            super::monitors_covered_by(&[rect(1920, 0, 3840, 1080)], &monitors),
+            vec![r"\\.\DISPLAY2".to_string()]
+        );
+        // Fullscreen on screen 1 only pauses screen 1.
+        assert_eq!(
+            super::monitors_covered_by(&[rect(-8, -8, 1928, 1088)], &monitors),
+            vec![r"\\.\DISPLAY1".to_string()]
+        );
+        // Two fullscreen apps pause both screens.
+        assert_eq!(
+            super::monitors_covered_by(
+                &[rect(0, 0, 1920, 1080), rect(1920, 0, 3840, 1080)],
+                &monitors
+            ),
+            vec![r"\\.\DISPLAY1".to_string(), r"\\.\DISPLAY2".to_string()]
+        );
+        // A window spanning both screens pauses both.
+        assert_eq!(
+            super::monitors_covered_by(&[rect(0, 0, 3840, 1080)], &monitors).len(),
+            2
+        );
+        // Small windows pause nothing.
+        assert!(super::monitors_covered_by(&[rect(100, 100, 800, 600)], &monitors).is_empty());
+        assert!(super::monitors_covered_by(&[], &monitors).is_empty());
+    }
+
+    #[test]
+    fn windows_behind_a_fullscreen_app_do_not_occlude_other_screens() {
+        let monitors = vec![
+            monitor_at(r"\\.\DISPLAY1", 0, 0),
+            monitor_at(r"\\.\DISPLAY2", 1920, 0),
+        ];
+        let fullscreen = rect(1920, 0, 3840, 1080);
+        // Normal maximized window (work area) sitting behind the game.
+        let behind = rect(1920, 0, 3840, 1040);
+        let fullscreen_keys = super::monitors_covered_by(&[fullscreen], &monitors);
+
+        // The game pauses screen 2, but the window behind it must not pause
+        // screen 1 through the global occlusion check.
+        assert!(!super::occluded_outside_fullscreen(
+            &[fullscreen, behind],
+            &monitors,
+            &fullscreen_keys
+        ));
+
+        // A large window on screen 1 still counts as a covered desktop.
+        let covered_one = rect(0, 0, 1920, 1050);
+        assert!(super::occluded_outside_fullscreen(
+            &[fullscreen, covered_one],
+            &monitors,
+            &fullscreen_keys
+        ));
+
+        // Without a fullscreen app the same maximized window occludes.
+        assert!(super::occluded_outside_fullscreen(
+            &[behind],
+            &monitors,
+            &[]
+        ));
     }
 }
