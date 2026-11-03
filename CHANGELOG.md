@@ -2,7 +2,7 @@
 
 All notable changes to Aura Engine are documented here.
 
-## [Unreleased]
+## [1.1.4] - 2026-11-03
 
 ### Fixed
 
