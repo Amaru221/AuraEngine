@@ -2,6 +2,20 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- The window could not be moved by dragging Aura's own title bar since 1.1.1.
+  The window procedure subclass that suppresses the default non-client frame
+  (`WM_NCACTIVATE`) also hid the activation message from winit, so winit never
+  marked the window as active and `egui-winit` skipped `StartDrag` whenever
+  `Window::has_focus()` was false. A synthetic activation message is now sent
+  once while the window is still hidden (so the frame paint is invisible) and
+  winit records the active state; later activations are still answered by the
+  subclass and never repaint the OS frame. This also restores
+  `InputState::focused`, so text fields paint their cursor again.
+
 ## [1.1.3] - 2026-10-30
 
 ### Changed

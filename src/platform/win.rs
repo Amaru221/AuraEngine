@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use anyhow::{Context, Result};
 use windows::core::{w, BOOL, PCWSTR};
@@ -32,7 +32,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, DefWindowProcW, EnumWindows, GetClassLongPtrW, GetClassNameW, GetCursorPos,
     GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowLongW, GetWindowRect,
     GetWindowThreadProcessId, IsIconic, FlashWindowEx, IsWindowVisible, SendMessageTimeoutW,
-    SetClassLongPtrW, SetWindowLongPtrW, SetWindowPos, ShowWindow, FLASHWINFO, FLASHW_ALL,
+    SendMessageW, SetClassLongPtrW, SetWindowLongPtrW, SetWindowPos, ShowWindow, FLASHWINFO,
+    FLASHW_ALL,
     GCLP_HBRBACKGROUND, GCLP_WNDPROC, GWLP_WNDPROC, GWL_EXSTYLE, HWND_BROADCAST, HWND_TOP,
     SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
     SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW,
@@ -722,6 +723,11 @@ static ORIGINAL_WINDOW_PROC: AtomicIsize = AtomicIsize::new(0);
 /// HWND whose window procedure has already been subclassed.
 static SUBCLASSED_WINDOW: AtomicIsize = AtomicIsize::new(0);
 
+/// First `WM_NCACTIVATE` after the subclass was installed. That one is injected
+/// by [`install_borderless_proc`] (while the window is still hidden) and must
+/// reach winit; every later one is answered here.
+static NC_ACTIVATE_PRIMED: AtomicBool = AtomicBool::new(false);
+
 type WndProcFn = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
 
 /// Suppresses the standard non-client painting of the borderless main window.
@@ -735,8 +741,14 @@ type WndProcFn = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT
 /// theme" border flash. Aura draws its own title bar and border, so the
 /// default paint is answered here and never reaches `DefWindowProc`.
 ///
-/// Focus events are still delivered because winit sends `Focused` from
-/// `WM_SETFOCUS`/`WM_KILLFOCUS`, not from this message.
+/// The first `WM_NCACTIVATE` is the exception: winit records the window as
+/// active from it (`WindowState::set_active`), and `Window::has_focus()` is
+/// `is_active && is_focused`. egui-winit only starts a title-bar drag when
+/// `has_focus()` is true, so swallowing every activation message made the
+/// window impossible to drag after v1.1.1. The priming message sent from
+/// [`install_borderless_proc`] runs while the window is still hidden, so the
+/// default frame paint cannot be seen, and winit keeps reporting focus
+/// correctly through `WM_SETFOCUS`/`WM_KILLFOCUS`, which are always chained.
 unsafe extern "system" fn aura_window_proc(
     hwnd: HWND,
     msg: u32,
@@ -745,7 +757,11 @@ unsafe extern "system" fn aura_window_proc(
 ) -> LRESULT {
     match msg {
         // "The non-client area is up to date": prevents the OS frame repaint.
-        WM_NCACTIVATE => return LRESULT(1),
+        WM_NCACTIVATE => {
+            if NC_ACTIVATE_PRIMED.swap(true, Ordering::SeqCst) {
+                return LRESULT(1);
+            }
+        }
         WM_NCPAINT => return LRESULT(0),
         _ => {}
     }
@@ -789,6 +805,18 @@ fn install_borderless_proc(hwnd: HWND) {
             };
             ORIGINAL_WINDOW_PROC.store(chain, Ordering::SeqCst);
             log::info!("borderless window procedure installed for {hwnd:?}");
+
+            // Let winit record the window as active. This happens on the first
+            // update, before the window is revealed, so the default non-client
+            // paint triggered by DefWindowProc is never visible. From now on
+            // `aura_window_proc` answers every activation message itself.
+            let _ = SendMessageW(
+                hwnd,
+                WM_NCACTIVATE,
+                Some(WPARAM(TRUE.0 as usize)),
+                Some(LPARAM(0)),
+            );
+            log::info!("primed window active state for {hwnd:?}");
         }
     }
 }

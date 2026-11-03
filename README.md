@@ -26,7 +26,7 @@ UI (egui)  ──►  WorkerW (capa del escritorio)  ──►  mpv --wid  ─�
 - **Bandeja del sistema** con menú completo.
 - **Actualizaciones automáticas** desde GitHub Releases, con verificación SHA-256 e instalación desde la propia app.
 - **Temas personalizables** en Ajustes → Apariencia: Aura Oscuro, Medianoche, Claro y Personalizado, con color de acento.
-- **Ventana translúcida** con barra de título propia y opacidad independiente para el contenedor, la barra lateral y la barra de título, con modo vinculado.
+- **Ventana translúcida** con barra de título propia (arrastrable para mover la ventana, con doble clic para maximizar o restaurar) y opacidad independiente para el contenedor, la barra lateral y la barra de título, con modo vinculado.
 - **Esquinas redondeadas** y cierre completo desde la bandeja (con watchdog si el apagado se bloquea).
 - **Atajos globales** (Ctrl+Alt+…).
 - **Biblioteca local** con miniaturas (mpv extrae el primer fotograma), búsqueda, filtros y favoritos. Las tarjetas de **Biblioteca** indican con badges `1`, `2`… en qué pantalla **conectada** está aplicado cada fondo, incluyendo el caso de una misma imagen en varias pantallas; la numeración es siempre consecutiva (`1..=N`) sobre las pantallas detectadas y nunca muestra números de pantallas desconectadas.
