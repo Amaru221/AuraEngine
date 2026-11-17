@@ -18,15 +18,17 @@ use windows::Win32::Graphics::Gdi::{
     EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, DISPLAY_DEVICEW,
     HDC, HMONITOR, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
 };
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+};
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use windows::Win32::UI::HiDpi::{
     GetDpiForMonitor, SetProcessDpiAwarenessContext, MDT_EFFECTIVE_DPI,
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Shell::{
-    SHQueryUserNotificationState, SetCurrentProcessExplicitAppUserModelID, QUNS_BUSY,
-    QUNS_NOT_PRESENT, QUNS_RUNNING_D3D_FULL_SCREEN,
+    ITaskbarList, SHQueryUserNotificationState, SetCurrentProcessExplicitAppUserModelID,
+    TaskbarList, QUNS_BUSY, QUNS_NOT_PRESENT, QUNS_RUNNING_D3D_FULL_SCREEN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, DefWindowProcW, EnumWindows, GetClassLongPtrW, GetClassNameW, GetCursorPos,
@@ -655,6 +657,50 @@ pub fn autostart_enabled() -> bool {
 static PARKED_WINDOW_PLACEMENT: std::sync::Mutex<Option<WINDOWPLACEMENT>> =
     std::sync::Mutex::new(None);
 
+/// Whether the taskbar tab was explicitly removed, so it is only added back
+/// when needed.
+static TASKBAR_TAB_REMOVED: AtomicBool = AtomicBool::new(false);
+
+/// Adds or removes the taskbar button through `ITaskbarList`.
+///
+/// Toggling `WS_EX_TOOLWINDOW` is not enough on every Windows build: the
+/// taskbar keeps showing the button of a window that changed its extended style
+/// at runtime. `DeleteTab`/`AddTab` is the documented way to refresh it.
+fn set_taskbar_tab(hwnd: HWND, hide: bool) {
+    if hide == TASKBAR_TAB_REMOVED.load(Ordering::SeqCst) {
+        return;
+    }
+    unsafe {
+        let taskbar: windows::core::Result<ITaskbarList> =
+            CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER);
+        let taskbar = match taskbar {
+            Ok(taskbar) => taskbar,
+            Err(err) => {
+                log::warn!("ITaskbarList unavailable: {err}");
+                return;
+            }
+        };
+        if taskbar.HrInit().is_err() {
+            return;
+        }
+        let result = if hide {
+            taskbar.DeleteTab(hwnd)
+        } else {
+            taskbar.AddTab(hwnd)
+        };
+        match result {
+            Ok(()) => {
+                log::info!(
+                    "taskbar tab {} for {hwnd:?}",
+                    if hide { "removed" } else { "added" }
+                );
+                TASKBAR_TAB_REMOVED.store(hide, Ordering::SeqCst);
+            }
+            Err(err) => log::warn!("could not update the taskbar tab: {err}"),
+        }
+    }
+}
+
 /// Moves the main window off-screen while keeping it "visible" for winit.
 ///
 /// Hiding it with `ShowWindow(SW_HIDE)` stops eframe from running its update
@@ -684,6 +730,7 @@ pub fn park_window(hwnd: HWND, hidden: bool) {
                 GWL_EXSTYLE,
                 ex_style | WS_EX_TOOLWINDOW.0 as isize,
             );
+            set_taskbar_tab(hwnd, true);
             let _ = SetWindowPos(
                 hwnd,
                 None,
@@ -699,6 +746,7 @@ pub fn park_window(hwnd: HWND, hidden: bool) {
                 GWL_EXSTYLE,
                 ex_style & !(WS_EX_TOOLWINDOW.0 as isize),
             );
+            set_taskbar_tab(hwnd, false);
             let saved = PARKED_WINDOW_PLACEMENT
                 .lock()
                 .ok()

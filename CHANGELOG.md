@@ -9,7 +9,12 @@ All notable changes to Aura Engine are documented here.
 - Closing the window with the X button or with "Close window" from the taskbar
   now always hides Aura in the notification area instead of quitting when the
   window is not in the foreground. The process, engine, global hotkeys and quick
-  switcher keep running, and the taskbar entry disappears.
+  switcher keep running, and the taskbar entry is removed explicitly through
+  `ITaskbarList::DeleteTab` (toggling `WS_EX_TOOLWINDOW` alone left the button on
+  screen on some Windows builds).
+- The taskbar click that closes the window also activates it; a short grace
+  period after hiding ignores that activation so the window never reopens by
+  itself (Task Manager's "Switch to" still restores it).
 - Reopening from the tray restores the window where it was: size, position and
   maximized state survive the round trip.
 - The tray context menu now mirrors playback: the pause entry becomes "Resume"

@@ -28,6 +28,11 @@ pub const HUD_COLS: usize = 5;
 pub const HUD_ROWS: usize = 3;
 pub const HUD_PAGE_SIZE: usize = HUD_COLS * HUD_ROWS;
 
+/// A parked window ignores foreground transitions for this long after hiding.
+/// The taskbar activates the window as part of the click that closes it, which
+/// used to reopen it immediately.
+const HIDDEN_RESTORE_GRACE: Duration = Duration::from_millis(1200);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Nav {
     Library,
@@ -170,6 +175,8 @@ pub struct AuraApp {
     pub last_edit: Instant,
 
     pub hidden: bool,
+    /// When the window was last parked in the notification area.
+    pub hidden_at: Option<Instant>,
     /// True once the parked window has lost the foreground at least once.
     /// A later foreground transition is then a real "Switch to" request.
     pub hidden_lost_foreground: bool,
@@ -465,6 +472,7 @@ impl AuraApp {
             dirty: monitors_reconciled,
             last_edit: Instant::now(),
             hidden,
+            hidden_at: hidden.then(Instant::now),
             hidden_lost_foreground: false,
             quitting: false,
             startup_done: false,
@@ -1514,6 +1522,7 @@ impl AuraApp {
 
     pub fn show_window(&mut self) {
         self.hidden = false;
+        self.hidden_at = None;
         self.hidden_lost_foreground = false;
     }
 
@@ -1526,6 +1535,7 @@ impl AuraApp {
         }
         log::info!("hiding window to the notification area");
         self.hidden = true;
+        self.hidden_at = Some(Instant::now());
         self.hidden_lost_foreground = false;
     }
 
@@ -1756,8 +1766,15 @@ impl AuraApp {
                 .unwrap_or(false);
             let (restore, lost) = parked_step(true, self.hidden_lost_foreground, is_fg);
             self.hidden_lost_foreground = lost;
-            if restore {
+            // Windows activates the window as part of the taskbar click that
+            // closed it. Ignore that transition so closing never reopens it.
+            let settled = self
+                .hidden_at
+                .map(|at| at.elapsed() >= HIDDEN_RESTORE_GRACE)
+                .unwrap_or(true);
+            if restore && settled {
                 self.hidden = false;
+                self.hidden_at = None;
             }
         }
 
@@ -1793,6 +1810,7 @@ impl eframe::App for AuraApp {
             self.startup_done = true;
             if self.cfg.start_hidden {
                 self.hidden = true;
+                self.hidden_at = Some(Instant::now());
                 self.hidden_lost_foreground = false;
             }
         }
