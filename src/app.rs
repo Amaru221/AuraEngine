@@ -486,7 +486,8 @@ impl AuraApp {
             nav: Nav::Library,
         };
 
-        app.tray = tray::create(app.strings);
+        let tray_state = app.tray_state();
+        app.tray = tray::create(app.strings, tray_state);
 
         // Low-frequency safety net: keeps tray/IPC polling alive even when a
         // minimized window stops receiving redraw requests. The normal frame
@@ -555,7 +556,8 @@ impl AuraApp {
     pub fn set_language(&mut self, lang: crate::config::Lang) {
         self.cfg.language = lang;
         self.strings = i18n::strings(lang);
-        self.tray = tray::create(self.strings);
+        let state = self.tray_state();
+        self.tray = tray::create(self.strings, state);
         self.mark_dirty();
     }
 
@@ -1515,6 +1517,18 @@ impl AuraApp {
         self.hidden_lost_foreground = false;
     }
 
+    /// Hides the window in the notification area while keeping the process
+    /// (engine, hotkeys, tray) alive. `apply_window_state` parks the native
+    /// window off-screen and removes it from the taskbar on the next frame.
+    pub fn hide_to_tray(&mut self) {
+        if self.hidden {
+            return;
+        }
+        log::info!("hiding window to the notification area");
+        self.hidden = true;
+        self.hidden_lost_foreground = false;
+    }
+
     pub fn open_switcher(&mut self) {
         if self.hud_open {
             self.hud_open = false;
@@ -1559,6 +1573,24 @@ impl AuraApp {
             });
     }
 
+    /// Snapshot of the playback/library state the tray menu reflects.
+    fn tray_state(&self) -> tray::TrayState {
+        tray::TrayState {
+            running: self.engine.running_count() > 0,
+            paused: self.engine.is_paused(),
+            library: !self.items.is_empty(),
+        }
+    }
+
+    /// Keeps the tray menu in sync with the engine (Pause <-> Resume label and
+    /// which actions make sense right now).
+    fn sync_tray(&mut self) {
+        let state = self.tray_state();
+        if let Some(tray) = self.tray.as_mut() {
+            tray.sync(state, self.strings);
+        }
+    }
+
     fn poll_tray(&mut self) {
         for action in tray::poll() {
             match action {
@@ -1571,6 +1603,7 @@ impl AuraApp {
                 TrayAction::Quit => self.request_quit(),
             }
         }
+        self.sync_tray();
     }
 
     fn poll_hotkeys(&mut self) {
@@ -1686,21 +1719,13 @@ impl AuraApp {
 
     fn handle_close_request(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) {
-            // The X button leaves Aura in the tray, but Task Manager's
-            // "End task" (and a system shutdown) must actually close it.
-            // When the close request arrives while another window is in the
-            // foreground, treat it as a system close and exit.
-            let foreground_is_ours = self
-                .main_hwnd
-                .map(|hwnd| {
-                    win::is_foreground(windows::Win32::Foundation::HWND(hwnd as *mut _))
-                })
-                .unwrap_or(false);
-
-            if self.cfg.close_to_tray && !self.quitting && foreground_is_ours {
+            // The X button (and "Close window" from the taskbar) hides Aura in
+            // the notification area instead of exiting. A real exit only comes
+            // from the tray's "Quit", or from Windows shutting the session
+            // down (WM_QUERYENDSESSION / WM_ENDSESSION).
+            if self.cfg.close_to_tray && !self.quitting && !win::system_shutdown_requested() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.hidden = true;
-                self.hidden_lost_foreground = false;
+                self.hide_to_tray();
             } else {
                 self.request_quit();
             }
@@ -1868,6 +1893,7 @@ impl eframe::App for AuraApp {
 
         self.tick_engine();
         self.poll_pause();
+        self.sync_tray();
         self.poll_accent();
         self.poll_updates(ctx);
 

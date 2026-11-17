@@ -140,15 +140,26 @@ Cambia el idioma en **Ajustes → General → Idioma**: español, inglés o fran
 
 ### Bandeja del sistema
 
-Clic izquierdo: abrir Aura. Clic derecho: abrir, siguiente/anterior, pausar, selector rápido, detener y salir.
+Clic izquierdo o doble clic: abrir Aura. Clic derecho: **Abrir Aura**,
+**Siguiente fondo** / **Fondo anterior** (deshabilitados sin biblioteca),
+**Pausar / Reanudar** (la etiqueta cambia segun el estado real de la
+reproduccion), **Selector rapido**, **Detener fondo** y **Salir**. Las acciones
+que no aplican en ese momento aparecen deshabilitadas y el tooltip del icono
+muestra si el fondo esta en reproduccion o en pausa.
 
-Al cerrar la ventana, Aura sigue en la bandeja (configurable).
+Al cerrar la ventana (boton **X** o **Cerrar ventana** desde la barra de
+tareas), Aura desaparece de la barra de tareas pero sigue ejecutandose en la
+bandeja; el motor, los atajos globales y el selector rapido continuan activos y
+la ventana se reabre como estaba (tamano, posicion y maximizado). Esto es
+configurable en **Ajustes**.
 
 ### Administrador de tareas
 
-- **Finalizar tarea** cierra Aura por completo (no la deja en la bandeja).
 - **Cambiar a** trae de vuelta la ventana si estaba oculta.
-- El botón **X** de la ventana sigue ocultándola en la bandeja (configurable en Ajustes).
+- **Finalizar tarea** termina el proceso por la fuerza.
+- Para cerrar Aura de forma limpia usa **Salir** en el menu de la bandeja; un
+  apagado o cierre de sesion de Windows tambien cierra la aplicacion.
+- El boton **X** de la ventana la oculta en la bandeja (configurable en Ajustes).
 
 ### Desinstalar
 

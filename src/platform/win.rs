@@ -30,14 +30,14 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, DefWindowProcW, EnumWindows, GetClassLongPtrW, GetClassNameW, GetCursorPos,
-    GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowLongW, GetWindowRect,
+    GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowLongW, GetWindowPlacement, GetWindowRect,
     GetWindowThreadProcessId, IsIconic, FlashWindowEx, IsWindowVisible, SendMessageTimeoutW,
-    SendMessageW, SetClassLongPtrW, SetWindowLongPtrW, SetWindowPos, ShowWindow, FLASHWINFO,
-    FLASHW_ALL,
+    SendMessageW, SetClassLongPtrW, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, FLASHWINFO,
+    FLASHW_ALL, WINDOWPLACEMENT,
     GCLP_HBRBACKGROUND, GCLP_WNDPROC, GWLP_WNDPROC, GWL_EXSTYLE, HWND_BROADCAST, HWND_TOP,
     SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW,
-    SW_SHOWNORMAL, WM_NCACTIVATE, WM_NCPAINT, WM_SETTINGCHANGE, WS_EX_TOOLWINDOW,
+    SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SW_SHOWNORMAL, WM_NCACTIVATE, WM_NCPAINT, WM_QUERYENDSESSION, WM_ENDSESSION, WM_SETTINGCHANGE, WS_EX_TOOLWINDOW,
     EDD_GET_DEVICE_INTERFACE_NAME,
 };
 
@@ -649,6 +649,12 @@ pub fn autostart_enabled() -> bool {
         .is_ok()
 }
 
+/// State of the window while it is parked in the notification area, so "Open"
+/// from the tray brings it back exactly where the user left it instead of
+/// resetting it to the default size.
+static PARKED_WINDOW_PLACEMENT: std::sync::Mutex<Option<WINDOWPLACEMENT>> =
+    std::sync::Mutex::new(None);
+
 /// Moves the main window off-screen while keeping it "visible" for winit.
 ///
 /// Hiding it with `ShowWindow(SW_HIDE)` stops eframe from running its update
@@ -658,6 +664,21 @@ pub fn park_window(hwnd: HWND, hidden: bool) {
     unsafe {
         let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         if hidden {
+            // Remember the normal placement (position, size, maximized state)
+            // so restoring from the tray does not lose the user's layout.
+            let mut placement = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                ..Default::default()
+            };
+            let valid = GetWindowPlacement(hwnd, &mut placement).is_ok()
+                && placement.rcNormalPosition.right > placement.rcNormalPosition.left
+                && placement.rcNormalPosition.bottom > placement.rcNormalPosition.top;
+            if valid {
+                if let Ok(mut slot) = PARKED_WINDOW_PLACEMENT.lock() {
+                    *slot = Some(placement);
+                }
+            }
+
             let _ = SetWindowLongPtrW(
                 hwnd,
                 GWL_EXSTYLE,
@@ -678,25 +699,44 @@ pub fn park_window(hwnd: HWND, hidden: bool) {
                 GWL_EXSTYLE,
                 ex_style & !(WS_EX_TOOLWINDOW.0 as isize),
             );
-            let monitor = monitors()
-                .into_iter()
-                .find(|m| m.primary)
-                .map(|m| m.work)
-                .unwrap_or_else(virtual_screen);
-            let width = 1240.min((monitor.width() - 60).max(900));
-            let height = 800.min((monitor.height() - 60).max(600));
-            let x = monitor.left + (monitor.width() - width) / 2;
-            let y = monitor.top + (monitor.height() - height) / 2;
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_TOP),
-                x,
-                y,
-                width,
-                height,
-                SWP_SHOWWINDOW | SWP_FRAMECHANGED,
-            );
-            let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
+            let saved = PARKED_WINDOW_PLACEMENT
+                .lock()
+                .ok()
+                .and_then(|mut slot| slot.take());
+            if let Some(placement) = saved {
+                // SetWindowPlacement restores the normal rect (even when the
+                // window was minimized when it was parked) and the show state.
+                let _ = SetWindowPlacement(hwnd, &placement);
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOP),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                );
+            } else {
+                let monitor = monitors()
+                    .into_iter()
+                    .find(|m| m.primary)
+                    .map(|m| m.work)
+                    .unwrap_or_else(virtual_screen);
+                let width = 1240.min((monitor.width() - 60).max(900));
+                let height = 800.min((monitor.height() - 60).max(600));
+                let x = monitor.left + (monitor.width() - width) / 2;
+                let y = monitor.top + (monitor.height() - height) / 2;
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOP),
+                    x,
+                    y,
+                    width,
+                    height,
+                    SWP_SHOWWINDOW | SWP_FRAMECHANGED,
+                );
+                let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
+            }
             // Do not call SetForegroundWindow here: it can block the UI thread
             // when another application (e.g. an exclusive fullscreen game) is
             // not pumping messages. Flashing is non-blocking and enough.
@@ -714,6 +754,16 @@ pub fn park_window(hwnd: HWND, hidden: bool) {
 
 pub fn open_logs_folder() {
     util::open_path(&util::logs_dir());
+}
+
+/// Set when Windows asks the session to end. A close request that arrives after
+/// `WM_QUERYENDSESSION` must really exit instead of parking the window in the
+/// notification area.
+static SYSTEM_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+/// Whether the OS is shutting down or logging the user off.
+pub fn system_shutdown_requested() -> bool {
+    SYSTEM_SHUTDOWN.load(Ordering::SeqCst)
 }
 
 /// Original winit window procedure, kept so every non-intercepted message can
@@ -763,6 +813,10 @@ unsafe extern "system" fn aura_window_proc(
             }
         }
         WM_NCPAINT => return LRESULT(0),
+        // Windows is ending the session: never keep Aura alive in the tray.
+        WM_QUERYENDSESSION | WM_ENDSESSION => {
+            SYSTEM_SHUTDOWN.store(true, Ordering::SeqCst);
+        }
         _ => {}
     }
 

@@ -2,6 +2,23 @@
 
 All notable changes to Aura Engine are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- Closing the window with the X button or with "Close window" from the taskbar
+  now always hides Aura in the notification area instead of quitting when the
+  window is not in the foreground. The process, engine, global hotkeys and quick
+  switcher keep running, and the taskbar entry disappears.
+- Reopening from the tray restores the window where it was: size, position and
+  maximized state survive the round trip.
+- The tray context menu now mirrors playback: the pause entry becomes "Resume"
+  while paused (and back), the tooltip reports the state, and entries that do
+  not apply (stop/pause without a wallpaper, next/previous/switcher without a
+  library) are disabled. A left double-click on the icon also opens Aura.
+- A system shutdown or log-off still exits Aura; "Quit" in the tray menu ends
+  the process completely.
+
 ## [1.1.4] - 2026-11-03
 
 ### Fixed
