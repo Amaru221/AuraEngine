@@ -20,7 +20,15 @@ All notable changes to Aura Engine are documented here.
 - The tray context menu now mirrors playback: the pause entry becomes "Resume"
   while paused (and back), the tooltip reports the state, and entries that do
   not apply (stop/pause without a wallpaper, next/previous/switcher without a
-  library) are disabled. A left double-click on the icon also opens Aura.
+  library) are disabled. A left click (single or double) on the icon opens Aura;
+  right click opens the menu.
+- Tray events are collected by a background forwarder thread that wakes the UI
+  loop with a real window message. Menu selections such as Open, Pause or Quit
+  now run even if the parked window is idle and Windows stopped delivering
+  paint messages to it.
+- A closed window no longer reopens by itself: the foreground-based restore
+  heuristic and the update-notice auto-show were removed. Use the tray icon to
+  bring Aura back.
 - A system shutdown or log-off still exits Aura; "Quit" in the tray menu ends
   the process completely.
 

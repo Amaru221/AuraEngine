@@ -31,16 +31,17 @@ use windows::Win32::UI::Shell::{
     TaskbarList, QUNS_BUSY, QUNS_NOT_PRESENT, QUNS_RUNNING_D3D_FULL_SCREEN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, DefWindowProcW, EnumWindows, GetClassLongPtrW, GetClassNameW, GetCursorPos,
-    GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowLongW, GetWindowPlacement, GetWindowRect,
-    GetWindowThreadProcessId, IsIconic, FlashWindowEx, IsWindowVisible, SendMessageTimeoutW,
-    SendMessageW, SetClassLongPtrW, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, FLASHWINFO,
-    FLASHW_ALL, WINDOWPLACEMENT,
+    CallWindowProcW, DefWindowProcW, EnumWindows, GetClassLongPtrW, GetClassNameW, GetClientRect,
+    GetCursorPos, GetSystemMetrics, GetWindowLongPtrW, GetWindowLongW,
+    GetWindowPlacement, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsZoomed,
+    FlashWindowEx, IsWindowVisible, PostMessageW, SendMessageTimeoutW, SendMessageW, SetClassLongPtrW,
+    SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, FLASHWINFO, FLASHW_ALL,
+    WINDOWPLACEMENT,
     GCLP_HBRBACKGROUND, GCLP_WNDPROC, GWLP_WNDPROC, GWL_EXSTYLE, HWND_BROADCAST, HWND_TOP,
-    SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
-    SW_SHOWNORMAL, WM_NCACTIVATE, WM_NCPAINT, WM_QUERYENDSESSION, WM_ENDSESSION, WM_SETTINGCHANGE, WS_EX_TOOLWINDOW,
-    EDD_GET_DEVICE_INTERFACE_NAME,
+    SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, SMTO_ABORTIFHUNG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SWP_SHOWWINDOW, SW_SHOWNORMAL, WM_NCACTIVATE, WM_NCPAINT, WM_QUERYENDSESSION, WM_ENDSESSION,
+    WM_SETTINGCHANGE, WM_SIZE, WS_EX_TOOLWINDOW, EDD_GET_DEVICE_INTERFACE_NAME,
 };
 
 use crate::util;
@@ -211,11 +212,6 @@ pub fn init_process() {
             std::sync::atomic::Ordering::Relaxed,
         );
     }
-}
-
-/// True when `hwnd` is the current foreground window.
-pub fn is_foreground(hwnd: HWND) -> bool {
-    unsafe { GetForegroundWindow() == hwnd }
 }
 
 pub fn exe_path() -> PathBuf {
@@ -809,6 +805,57 @@ pub fn open_logs_folder() {
 /// notification area.
 static SYSTEM_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
+/// HWND of the main window, published so background threads (the tray event
+/// forwarder) can wake the UI loop.
+static MAIN_WINDOW: AtomicIsize = AtomicIsize::new(0);
+
+/// Posts a real `WM_SIZE` with the current client size.
+///
+/// A parked window is invisible to the user but still gets repaint requests;
+/// historically those were enough, but Windows can stop delivering `WM_PAINT`
+/// to a window parked far off-screen, which leaves tray/IPC actions queued
+/// forever. `WM_SIZE` makes winit emit `Resized`, and eframe repaints
+/// immediately, no matter where the window is.
+pub fn wake_main_window() {
+    let raw = MAIN_WINDOW.load(Ordering::SeqCst);
+    if raw == 0 {
+        return;
+    }
+    let hwnd = HWND(raw as *mut _);
+    unsafe {
+        let mut rect = RECT::default();
+        let (width, height) = if GetClientRect(hwnd, &mut rect).is_ok() {
+            (
+                (rect.right - rect.left).max(1) as u32,
+                (rect.bottom - rect.top).max(1) as u32,
+            )
+        } else {
+            (1240, 800)
+        };
+        // Keep winit's cached size state truthful: posting SIZE_RESTORED to a
+        // maximized window would make it believe it is not maximized.
+        let size_state = if IsIconic(hwnd).as_bool() {
+            SIZE_MINIMIZED
+        } else if IsZoomed(hwnd).as_bool() {
+            SIZE_MAXIMIZED
+        } else {
+            SIZE_RESTORED
+        };
+        let (width, height) = if width <= 1 || height <= 1 {
+            (1240, 800)
+        } else {
+            (width, height)
+        };
+        let lparam = (((height & 0xFFFF) << 16) | (width & 0xFFFF)) as isize;
+        let _ = PostMessageW(
+            Some(hwnd),
+            WM_SIZE,
+            WPARAM(size_state as usize),
+            LPARAM(lparam),
+        );
+    }
+}
+
 /// Whether the OS is shutting down or logging the user off.
 pub fn system_shutdown_requested() -> bool {
     SYSTEM_SHUTDOWN.load(Ordering::SeqCst)
@@ -935,6 +982,7 @@ fn install_borderless_proc(hwnd: HWND) {
 /// the window is revealed. Aura paints its own border in `ui::window_border`,
 /// so DWM's is removed.
 pub fn prepare_window(hwnd: HWND) {
+    MAIN_WINDOW.store(hwnd.0 as isize, Ordering::SeqCst);
     install_borderless_proc(hwnd);
 
     unsafe {

@@ -1,9 +1,14 @@
 //! System tray icon and menu.
 
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use crossbeam_channel::Receiver;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::i18n::Strings;
+use crate::platform::win;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
@@ -41,6 +46,10 @@ pub struct Tray {
 }
 
 pub fn create(strings: &Strings, state: TrayState) -> Option<Tray> {
+    // Start collecting events immediately, even if the window starts hidden and
+    // eframe does not run a frame for a while.
+    start_forwarder();
+
     let menu = Menu::new();
     let show = MenuItem::with_id("show", strings.tray_show, true, None);
     let next = MenuItem::with_id("next", strings.tray_next, true, None);
@@ -73,6 +82,7 @@ pub fn create(strings: &Strings, state: TrayState) -> Option<Tray> {
 
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu.clone()))
+        .with_menu_on_left_click(false)
         .with_tooltip(tooltip(strings, state.paused))
         .with_icon(icon)
         .build()
@@ -125,7 +135,31 @@ fn tooltip(strings: &Strings, paused: bool) -> String {
     format!("{} - {}", strings.app_name, status)
 }
 
-pub fn poll() -> Vec<TrayAction> {
+/// Actions collected by the background tray forwarder. `poll` drains this
+/// instead of reading muda/tray-icon receivers directly, so tray clicks and
+/// menu selections are never lost while the window is parked and idle.
+static ACTION_RX: OnceLock<Receiver<TrayAction>> = OnceLock::new();
+
+fn start_forwarder() -> &'static Receiver<TrayAction> {
+    ACTION_RX.get_or_init(|| {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let _ = std::thread::Builder::new()
+            .name("aura-tray-events".into())
+            .spawn(move || loop {
+                for action in drain_raw() {
+                    let _ = tx.send(action);
+                    // The UI loop may be asleep while the window is parked. A
+                    // real resize wakes winit/eframe even when the parked
+                    // window stops receiving WM_PAINT.
+                    win::wake_main_window();
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            });
+        rx
+    })
+}
+
+fn drain_raw() -> Vec<TrayAction> {
     let mut actions = Vec::new();
 
     while let Ok(event) = TrayIconEvent::receiver().try_recv() {
@@ -162,6 +196,10 @@ pub fn poll() -> Vec<TrayAction> {
     }
 
     actions
+}
+
+pub fn poll() -> Vec<TrayAction> {
+    start_forwarder().try_iter().collect()
 }
 
 pub fn icon_rgba() -> Vec<u8> {

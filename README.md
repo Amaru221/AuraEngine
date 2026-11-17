@@ -155,8 +155,10 @@ configurable en **Ajustes**.
 
 ### Administrador de tareas
 
-- **Cambiar a** trae de vuelta la ventana si estaba oculta.
 - **Finalizar tarea** termina el proceso por la fuerza.
+- Mientras Aura está oculta no tiene botón en la barra de tareas, así que no
+  aparece la opción **Cambiar a**; usa el icono de la bandeja (**Abrir Aura** o
+  clic izquierdo) para recuperar la ventana.
 - Para cerrar Aura de forma limpia usa **Salir** en el menu de la bandeja; un
   apagado o cierre de sesion de Windows tambien cierra la aplicacion.
 - El boton **X** de la ventana la oculta en la bandeja (configurable en Ajustes).

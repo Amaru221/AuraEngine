@@ -27,7 +27,6 @@ impl AuraApp {
         if items.is_empty() {
             log::warn!("quick switcher: items snapshot is empty, closing");
             self.hud_open = false;
-            self.hidden_lost_foreground = false;
             return;
         }
         let len = items.len();
@@ -347,11 +346,9 @@ impl AuraApp {
         if let Some(path) = apply_path {
             self.apply_media(&path, None);
             self.hud_open = false;
-            self.hidden_lost_foreground = false;
         }
         if close {
             self.hud_open = false;
-            self.hidden_lost_foreground = false;
         }
         if toggle_pause {
             self.toggle_pause();
